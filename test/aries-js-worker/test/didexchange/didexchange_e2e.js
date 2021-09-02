@@ -82,11 +82,19 @@ export const didExchangeClient = class {
     }
 
     static async addRouter(mode, agent) {
-        let resp = await agent.mediator.getConnections()
-        if (resp.connections){
-            for (let i = 0; i < resp.connections.length; i++) {
-                await agent.mediator.unregister({"connectionID": resp.connections[i]})
+        try {
+            let resp = await agent.mediator.getConnections()
+            if (resp.connections){
+                for (let i = 0; i < resp.connections.length; i++) {
+                    await agent.mediator.unregister({"connectionID": resp.connections[i]})
+                }
             }
+        }catch (e){
+            if (!e.message.includes("data not found")) {
+                throw new Error(e);
+            }
+
+            console.log(e)
         }
 
         // receive an invitation from the router via the controller API
@@ -125,8 +133,8 @@ export const didExchangeClient = class {
             await this.agent2.mediator.unregister({"connectionID": this.agent2RouterConnection})
         }
 
-        await this.agent1.destroy()
-        await this.agent2.destroy()
+        this.agent1 ? await this.agent1.destroy() : ''
+        this.agent2 ?  await this.agent2.destroy() : ''
     }
 
     static async createInvitationFromRouter(endpoint) {
@@ -210,8 +218,8 @@ export const didExchangeClient = class {
 }
 
 export async function newDIDExchangeClient(agent1, agent2) {
-    let aries1 = await newAries(agent1, agent1)
-    let aries2 = await newAries(agent2, agent2)
+    let aries1 = await newAries(agent1, agent1, [], [`${environment.HTTP_LOCAL_CONTEXT_PROVIDER_URL}`])
+    let aries2 = await newAries(agent2, agent2, [], [`${environment.HTTP_LOCAL_CONTEXT_PROVIDER_URL}`])
 
     return new didExchangeClient(aries1, aries2, wasmMode)
 }

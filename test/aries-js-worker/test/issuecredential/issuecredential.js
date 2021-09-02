@@ -3,6 +3,7 @@ Copyright SecureKey Technologies Inc. All Rights Reserved.
 
 SPDX-License-Identifier: Apache-2.0
 */
+
 import {environment} from "../environment.js";
 import {newDIDExchangeClient, newDIDExchangeRESTClient} from "../didexchange/didexchange_e2e.js";
 import {watchForEvent} from "../common.js";
@@ -101,7 +102,9 @@ async function issueCredential (mode) {
 
     const credentialName = "license"
 
+    let credential;
     it("Holder accepts credential", async function () {
+        credential = getCredential(holder, credentialName)
         return holder.issuecredential.acceptCredential({
             piid: (await holderAction).Properties.piid,
             names: [credentialName],
@@ -109,11 +112,11 @@ async function issueCredential (mode) {
     })
 
     it("Checks credential", async function () {
-        let credential = await getCredential(holder, credentialName)
+        let cred = await credential;
         let credentials = await holder.verifiable.getCredentials()
 
         const check = (cred) =>{
-            if (cred.id !== credential.id){
+            if (cred.id !== cred.id){
                 return false
             }
 

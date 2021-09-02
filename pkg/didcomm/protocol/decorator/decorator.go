@@ -15,7 +15,8 @@ import (
 	"time"
 
 	"github.com/hyperledger/aries-framework-go/pkg/crypto"
-	"github.com/hyperledger/aries-framework-go/pkg/doc/jose"
+	"github.com/hyperledger/aries-framework-go/pkg/doc/jose/jwk"
+	"github.com/hyperledger/aries-framework-go/pkg/doc/jose/jwk/jwksupport"
 	"github.com/hyperledger/aries-framework-go/pkg/kms"
 	"github.com/hyperledger/aries-framework-go/pkg/vdr/fingerprint"
 )
@@ -148,14 +149,14 @@ type rawProtected struct {
 func (d *AttachmentData) Sign(c crypto.Crypto, kh, pub interface{}, pubBytes []byte) error { // nolint:funlen,gocyclo
 	didKey, _ := fingerprint.CreateDIDKey(pubBytes)
 
-	jwk, err := jose.JWKFromKey(pub)
+	j, err := jwksupport.JWKFromKey(pub)
 	if err != nil {
 		return fmt.Errorf("creating jwk from pub key: %w", err)
 	}
 
-	jwk.KeyID = didKey
+	j.KeyID = didKey
 
-	jwkBytes, err := jwk.MarshalJSON()
+	jwkBytes, err := j.MarshalJSON()
 	if err != nil {
 		return fmt.Errorf("marshaling jwk: %w", err)
 	}
@@ -164,7 +165,7 @@ func (d *AttachmentData) Sign(c crypto.Crypto, kh, pub interface{}, pubBytes []b
 		JWK: jwkBytes,
 	}
 
-	kty, err := jwk.KeyType()
+	kty, err := j.KeyType()
 	if err != nil {
 		return fmt.Errorf("getting keytype: %w", err)
 	}
@@ -189,15 +190,7 @@ func (d *AttachmentData) Sign(c crypto.Crypto, kh, pub interface{}, pubBytes []b
 
 	protectedB64 := base64.RawURLEncoding.EncodeToString(protectedBytes)
 
-	var b64data string
-
-	// interop: the specific behaviour here isn't fully specified by the attachment decorator RFC (as of yet)
-	// see issue https://github.com/hyperledger/aries-cloudagent-python/issues/1108
-	if doACAPyInterop {
-		b64data = b64ToRawURL(d.Base64)
-	} else {
-		b64data = d.Base64
-	}
+	b64data := b64ToRawURL(d.Base64)
 
 	signedData := fmt.Sprintf("%s.%s", protectedB64, b64data)
 
@@ -228,8 +221,8 @@ func b64ToRawURL(s string) string {
 	return strings.ReplaceAll(strings.ReplaceAll(strings.Trim(s, "="), "+", "-"), "/", "_")
 }
 
-// Verify verify the signature on the attachment data.
-func (d *AttachmentData) Verify(c crypto.Crypto, keyManager kms.KeyManager) error { // nolint:funlen,gocyclo
+// Verify verifies the signature on the attachment data.
+func (d *AttachmentData) Verify(c crypto.Crypto, keyManager kms.KeyManager) error { // nolint:gocyclo
 	if d.JWS == nil {
 		return fmt.Errorf("no signature to verify")
 	}
@@ -258,14 +251,14 @@ func (d *AttachmentData) Verify(c crypto.Crypto, keyManager kms.KeyManager) erro
 		return fmt.Errorf("parsing protected header: %w", err)
 	}
 
-	jwk := jose.JWK{}
+	j := jwk.JWK{}
 
-	err = jwk.UnmarshalJSON(protected.JWK)
+	err = j.UnmarshalJSON(protected.JWK)
 	if err != nil {
 		return fmt.Errorf("parsing jwk: %w", err)
 	}
 
-	keyType, err := jwk.KeyType()
+	keyType, err := j.KeyType()
 	if err != nil {
 		return fmt.Errorf("getting KeyType for jwk: %w", err)
 	}
@@ -280,15 +273,7 @@ func (d *AttachmentData) Verify(c crypto.Crypto, keyManager kms.KeyManager) erro
 		return fmt.Errorf("decoding signature: %w", err)
 	}
 
-	var b64data string
-
-	// interop: the specific behaviour here isn't fully specified by the attachment decorator RFC (as of yet)
-	// see issue https://github.com/hyperledger/aries-cloudagent-python/issues/1108
-	if doACAPyInterop {
-		b64data = b64ToRawURL(d.Base64)
-	} else {
-		b64data = d.Base64
-	}
+	b64data := b64ToRawURL(d.Base64)
 
 	signedData := fmt.Sprintf("%s.%s", jws.Protected, b64data)
 

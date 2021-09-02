@@ -26,6 +26,7 @@ import (
 	"github.com/hyperledger/aries-framework-go/pkg/controller/command/introduce"
 	"github.com/hyperledger/aries-framework-go/pkg/controller/command/issuecredential"
 	"github.com/hyperledger/aries-framework-go/pkg/controller/command/kms"
+	"github.com/hyperledger/aries-framework-go/pkg/controller/command/ld"
 	"github.com/hyperledger/aries-framework-go/pkg/controller/command/mediator"
 	"github.com/hyperledger/aries-framework-go/pkg/controller/command/messaging"
 	"github.com/hyperledger/aries-framework-go/pkg/controller/command/outofband"
@@ -131,6 +132,10 @@ func prepareFrameworkOptions(opts *config.Options) ([]aries.Option, error) {
 		}
 
 		options = append(options, rsopts...)
+	}
+
+	if opts.DocumentLoader != nil {
+		options = append(options, aries.WithJSONLDDocumentLoader(opts.DocumentLoader))
 	}
 
 	return options, nil
@@ -321,4 +326,14 @@ func (a *Aries) GetKMSController() (api.KMSController, error) {
 	}
 
 	return &KMS{handlers: handlers}, nil
+}
+
+// GetLDController returns an LD instance.
+func (a *Aries) GetLDController() (api.LDController, error) {
+	handlers, ok := a.handlers[ld.CommandName]
+	if !ok {
+		return nil, fmt.Errorf("no handlers found for controller [%s]", ld.CommandName)
+	}
+
+	return &LD{handlers: handlers}, nil
 }

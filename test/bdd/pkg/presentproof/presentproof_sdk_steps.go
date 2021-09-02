@@ -249,7 +249,7 @@ func (a *SDKSteps) sendRequestPresentationDefinition(agent1, agent2 string) erro
 						ID: uuid.New().String(),
 						InputDescriptors: []*presexch.InputDescriptor{{
 							Schema: []*presexch.Schema{{
-								URI: "https://www.w3.org/2018/credentials/examples/v1#UniversityDegreeCredential",
+								URI: "https://example.org/examples#UniversityDegreeCredential",
 							}},
 							ID: uuid.New().String(),
 							Constraints: &presexch.Constraints{
@@ -327,7 +327,7 @@ func (a *SDKSteps) acceptRequestPresentation(prover, verifier string) error {
 		return fmt.Errorf("failed to key kid for kms: %w", err)
 	}
 
-	vpJWS, err := jwtClaims.MarshalJWS(verifiable.EdDSA, newSigner(km, cr, kid), "")
+	vpJWS, err := jwtClaims.MarshalJWS(verifiable.EdDSA, newSigner(km, cr, kid), pubKey.ID)
 	if err != nil {
 		return fmt.Errorf("failed to sign VP inside JWT: %w", err)
 	}
@@ -380,10 +380,10 @@ func (a *SDKSteps) acceptRequestPresentationBBS(prover, _, proof string) error {
 				},
 			},
 		},
-		Issued: &util.TimeWithTrailingZeroMsec{
+		Issued: &util.TimeWrapper{
 			Time: time.Now(),
 		},
-		Expired: &util.TimeWithTrailingZeroMsec{
+		Expired: &util.TimeWrapper{
 			Time: time.Now().AddDate(1, 0, 0),
 		},
 		Issuer: verifiable.Issuer{

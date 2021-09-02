@@ -7,6 +7,7 @@ SPDX-License-Identifier: Apache-2.0
 package controller
 
 import (
+	"net/http"
 	"strconv"
 	"testing"
 
@@ -19,6 +20,7 @@ import (
 	"github.com/hyperledger/aries-framework-go/pkg/framework/aries/defaults"
 	"github.com/hyperledger/aries-framework-go/pkg/framework/context"
 	"github.com/hyperledger/aries-framework-go/pkg/internal/test/transportutil"
+	"github.com/hyperledger/aries-framework-go/pkg/ld"
 	"github.com/hyperledger/aries-framework-go/pkg/mock/didcomm/msghandler"
 )
 
@@ -68,14 +70,15 @@ func TestGetCommandHandlers_Success(t *testing.T) {
 
 		handlers, err := GetCommandHandlers(ctx, WithMessageHandler(msghandler.NewMockMsgServiceProvider()),
 			WithAutoAccept(true), WithDefaultLabel("sample-label"),
-			WithWebhookURLs("sample-wh-url"), WithNotifier(webhook.NewMockWebhookNotifier()))
+			WithWebhookURLs("sample-wh-url"), WithNotifier(webhook.NewMockWebhookNotifier()),
+			WithHTTPClient(http.DefaultClient), WithLDService(ld.New(ctx)))
 		require.NoError(t, err)
 		require.NotEmpty(t, handlers)
 	})
 }
 
 func TestGetRESTHandlers_Success(t *testing.T) {
-	t.Run("", func(t *testing.T) {
+	t.Run("default", func(t *testing.T) {
 		framework, err := aries.New(defaults.WithInboundHTTPAddr(":"+
 			strconv.Itoa(transportutil.GetRandomPort(3)), "", "", ""))
 		require.NoError(t, err)
@@ -91,7 +94,7 @@ func TestGetRESTHandlers_Success(t *testing.T) {
 		require.NoError(t, err)
 		require.NotEmpty(t, handlers)
 	})
-	t.Run("", func(t *testing.T) {
+	t.Run("with options", func(t *testing.T) {
 		framework, err := aries.New(defaults.WithInboundHTTPAddr(":"+
 			strconv.Itoa(transportutil.GetRandomPort(3)), "", "", ""))
 		require.NoError(t, err)
@@ -104,8 +107,8 @@ func TestGetRESTHandlers_Success(t *testing.T) {
 		require.NotNil(t, ctx)
 
 		handlers, err := GetRESTHandlers(ctx, WithMessageHandler(msghandler.NewMockMsgServiceProvider()),
-			WithAutoAccept(true), WithDefaultLabel("sample-label"),
-			WithWebhookURLs("sample-wh-url"))
+			WithAutoAccept(true), WithDefaultLabel("sample-label"), WithAutoExecuteRFC0593(true),
+			WithWebhookURLs("sample-wh-url"), WithHTTPClient(http.DefaultClient), WithLDService(ld.New(ctx)))
 		require.NoError(t, err)
 		require.NotEmpty(t, handlers)
 	})

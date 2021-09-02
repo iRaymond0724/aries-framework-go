@@ -229,6 +229,89 @@ type deriveResponse struct {
 	Credential json.RawMessage `json:"credential"`
 }
 
+// createKeyPairRequest is request model for creating a key pair from wallet.
+//
+// swagger:parameters createKeyPairReq
+type createKeyPairRequest struct { // nolint: unused,deadcode
+	// Params for creating key pair from wallet.
+	//
+	// in: body
+	Params *vcwallet.CreateKeyPairRequest
+}
+
+// createKeyPairResponse is response model for creating a key pair from wallet.
+//
+// swagger:response createKeyPairRes
+type createKeyPairResponse struct {
+	// key pair created
+	//
+	// in: body
+	Response *vcwallet.CreateKeyPairResponse `json:"response"`
+}
+
+// checkProfileRequest model
+//
+// to check if wallet profile exists for given wallet user.
+//
+// swagger:parameters checkProfile
+type checkProfileRequest struct { // nolint: unused,deadcode
+	// Wallet User's ID used to create profile.
+	//
+	// in: path
+	// required: true
+	ID string `json:"id"`
+}
+
+// connectRequest is request model for wallet DID connect operation.
+//
+// swagger:parameters connectReq
+type connectRequest struct { // nolint: unused,deadcode
+	// Params for connecting to wallet for DIDComm.
+	//
+	// in: body
+	Params *vcwallet.ConnectRequest
+}
+
+// connectResponse is response model from wallet DID connect operation.
+//
+// swagger:response connectRes
+type connectResponse struct {
+	// wallet connect response.
+	//
+	// in: body
+	Response *vcwallet.ConnectResponse `json:"response"`
+}
+
+// proposePresentationRequest is request model for performing propose presentation operation from wallet.
+//
+// swagger:parameters proposePresReq
+type proposePresentationRequest struct { // nolint: unused,deadcode
+	// Params for proposing presentation from wallet.
+	//
+	// in: body
+	Params *vcwallet.ProposePresentationRequest
+}
+
+// proposePresentationResponse is response model from wallet propose presentation operation.
+//
+// swagger:response proposePresRes
+type proposePresentationResponse struct {
+	// response containing request presentation message from relyinig party.
+	//
+	// in: body
+	Response *vcwallet.ProposePresentationResponse `json:"response"`
+}
+
+// presentProofRequest is request model for performing present proof operation from wallet.
+//
+// swagger:parameters presentProofReq
+type presentProofRequest struct { // nolint: unused,deadcode
+	// Params for accepting presentation request and sending present proof message to relying party.
+	//
+	// in: body
+	Params *vcwallet.PresentProofRequest
+}
+
 // emptyRes model
 //
 // swagger:response emptyRes

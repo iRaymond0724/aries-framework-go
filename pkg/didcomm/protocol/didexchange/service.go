@@ -20,6 +20,7 @@ import (
 	"github.com/hyperledger/aries-framework-go/pkg/didcomm/dispatcher"
 	"github.com/hyperledger/aries-framework-go/pkg/didcomm/protocol/decorator"
 	"github.com/hyperledger/aries-framework-go/pkg/didcomm/protocol/mediator"
+	"github.com/hyperledger/aries-framework-go/pkg/didcomm/transport"
 	"github.com/hyperledger/aries-framework-go/pkg/doc/did"
 	vdrapi "github.com/hyperledger/aries-framework-go/pkg/framework/aries/api/vdr"
 	"github.com/hyperledger/aries-framework-go/pkg/internal/logutil"
@@ -84,6 +85,7 @@ type provider interface {
 	Service(id string) (interface{}, error)
 	KeyType() kms.KeyType
 	KeyAgreementType() kms.KeyType
+	MediaTypeProfiles() []string
 }
 
 // stateMachineMsg is an internal struct used to pass data to state machine.
@@ -114,6 +116,7 @@ type context struct {
 	doACAPyInterop     bool
 	keyType            kms.KeyType
 	keyAgreementType   kms.KeyType
+	mediaTypeProfiles  []string
 }
 
 // opts are used to provide client properties to DID Exchange service.
@@ -157,6 +160,11 @@ func New(prov provider) (*Service, error) {
 		keyAgreementType = kms.X25519ECDHKWType
 	}
 
+	mediaTypeProfiles := prov.MediaTypeProfiles()
+	if len(mediaTypeProfiles) == 0 {
+		mediaTypeProfiles = []string{transport.MediaTypeRFC0019EncryptedEnvelope}
+	}
+
 	svc := &Service{
 		ctx: &context{
 			outboundDispatcher: prov.OutboundDispatcher(),
@@ -169,6 +177,7 @@ func New(prov provider) (*Service, error) {
 			doACAPyInterop:     doACAPyInterop,
 			keyType:            keyType,
 			keyAgreementType:   keyAgreementType,
+			mediaTypeProfiles:  mediaTypeProfiles,
 		},
 		// TODO channel size - https://github.com/hyperledger/aries-framework-go/issues/246
 		callbackChannel:    make(chan *message, callbackChannelSize),
@@ -348,10 +357,8 @@ func (s *Service) handle(msg *message, aEvent chan<- service.DIDCommAction) erro
 		logger.Debugf("finished execute state: %s", next.Name())
 
 		if err = s.update(msg.Msg.Type(), connectionRecord); err != nil {
-			return fmt.Errorf("failed to persist state %s %w", next.Name(), err)
+			return fmt.Errorf("failed to persist state '%s': %w", next.Name(), err)
 		}
-
-		logger.Debugf("updated connection record %+v", connectionRecord)
 
 		if connectionRecord.State == StateIDCompleted {
 			err = s.connectionStore.SaveDIDByResolving(connectionRecord.TheirDID, connectionRecord.RecipientKeys...)
@@ -778,11 +785,6 @@ func pad(b64 string) string {
 }
 
 func getRequestConnection(r *Request) (*Connection, error) {
-	// Interop: accept the 'connection' attribute of rfc 0160 (connection protocol) if present
-	if r.Connection != nil {
-		return r.Connection, nil
-	}
-
 	if r.DocAttach == nil {
 		return nil, fmt.Errorf("missing did_doc~attach from request")
 	}
@@ -826,11 +828,11 @@ func (s *Service) requestMsgRecord(msg service.DIDCommMsg) (*connection.Record, 
 		Namespace:    theirNSPrefix,
 	}
 
-	// Interop: read their DID from the connection attribute if present
-	if request.Connection != nil {
-		connRecord.TheirDID = request.Connection.DID
-	} else {
-		connRecord.TheirDID = request.DID
+	connRecord.TheirDID = request.DID
+
+	// ACA-Py Interop: https://github.com/hyperledger/aries-cloudagent-python/issues/1048
+	if !strings.HasPrefix(connRecord.TheirDID, "did") {
+		connRecord.TheirDID = "did:peer:" + connRecord.TheirDID
 	}
 
 	if err := s.connectionRecorder.SaveConnectionRecord(connRecord); err != nil {

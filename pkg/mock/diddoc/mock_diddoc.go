@@ -56,6 +56,83 @@ func GetMockDIDDoc(t *testing.T) *did.Doc {
 	}
 }
 
+// GetMockDIDDocWithKeyAgreements creates mock DID doc with KeyAgreements.
+func GetMockDIDDocWithKeyAgreements(t *testing.T) *did.Doc {
+	didDoc := GetMockDIDDoc(t)
+
+	didDoc.KeyAgreement = []did.Verification{
+		{
+			VerificationMethod: did.VerificationMethod{
+				ID:         "did:example:123456789abcdefghi#keys3",
+				Controller: "did:example:123456789abcdefghi",
+				Type:       "X25519KeyAgreementKey2019",
+				Value:      base58.Decode("JhNWeSVLMYccCk7iopQW4guaSJTojqpMEELgSLhKwRr"),
+			},
+		},
+		{
+			VerificationMethod: did.VerificationMethod{
+				ID:         "#keys4",
+				Controller: "did:example:123456789abcdefghi",
+				Type:       "X25519KeyAgreementKey2019",
+				Value:      base58.Decode("JhNWeSVLMYccCk7iopQW4guaSJTojqpMEELgSLhKwRr"),
+			},
+		},
+	}
+
+	return didDoc
+}
+
+// GetMockDIDDocWithDIDCommV2Bloc using a DIDComm V2 service bloc.
+func GetMockDIDDocWithDIDCommV2Bloc(t *testing.T, id string) *did.Doc {
+	t.Helper()
+
+	peerDID := "did:peer:" + id
+
+	return &did.Doc{
+		Context: []string{"https://www.w3.org/ns/did/v1"},
+		ID:      peerDID,
+		Service: []did.Service{
+			{
+				ServiceEndpoint: "https://localhost:8090",
+				Type:            "DIDCommMessaging",
+				Priority:        0,
+				RecipientKeys:   []string{MockDIDKey(t)},
+				RoutingKeys:     []string{MockDIDKey(t)},
+			},
+		},
+		VerificationMethod: []did.VerificationMethod{
+			{
+				ID:         peerDID + "#key-1",
+				Controller: peerDID,
+				Type:       "Secp256k1VerificationKey2018",
+				Value:      base58.Decode("H3C2AVvLMv6gmMNam3uVAjZpfkcJCwDwnZn6z3wXmqPV"),
+			},
+			{
+				ID:         peerDID + "#key-2",
+				Controller: peerDID,
+				Type:       "Ed25519VerificationKey2018",
+				Value:      base58.Decode("H3C2AVvLMv6gmMNam3uVAjZpfkcJCwDwnZn6z3wXmqPV"),
+			},
+			{
+				ID:         peerDID + "#key-3",
+				Controller: "did:example:123456789abcdefghw",
+				Type:       "RsaVerificationKey2018",
+				Value:      base58.Decode("H3C2AVvLMv6gmMNam3uVAjZpfkcJCwDwnZn6z3wXmqPV"),
+			},
+		},
+		KeyAgreement: []did.Verification{
+			{
+				VerificationMethod: did.VerificationMethod{
+					ID:         peerDID + "#key-4",
+					Controller: peerDID,
+					Type:       "X25519KeyAgreementKey2019",
+					Value:      base58.Decode("JhNWeSVLMYccCk7iopQW4guaSJTojqpMEELgSLhKwRr"),
+				},
+			},
+		},
+	}
+}
+
 // GetMockIndyDoc creates a mock DID Doc for testing.
 func GetMockIndyDoc(t *testing.T) *did.Doc {
 	t.Helper()
