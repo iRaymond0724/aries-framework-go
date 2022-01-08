@@ -17,12 +17,21 @@ import (
 type MockPresentProofSvc struct {
 	service.Action
 	service.Message
-	ProtocolName       string
-	HandleFunc         func(service.DIDCommMsg) (string, error)
-	HandleOutboundFunc func(msg service.DIDCommMsg, myDID, theirDID string) (string, error)
-	AcceptFunc         func(string) bool
-	ActionsFunc        func() ([]presentproof.Action, error)
-	ActionContinueFunc func(string, presentproof.Opt) error
+	ProtocolName             string
+	HandleFunc               func(service.DIDCommMsg) (string, error)
+	HandleOutboundFunc       func(msg service.DIDCommMsg, myDID, theirDID string) (string, error)
+	AcceptFunc               func(string) bool
+	ActionsFunc              func() ([]presentproof.Action, error)
+	ActionContinueFunc       func(string, ...presentproof.Opt) error
+	RegisterMsgEventHandle   func(chan<- service.StateMsg) error
+	RegisterMsgEventErr      error
+	UnregisterMsgEventHandle func(chan<- service.StateMsg) error
+	UnregisterMsgEventErr    error
+}
+
+// Initialize service.
+func (m *MockPresentProofSvc) Initialize(interface{}) error {
+	return nil
 }
 
 // HandleInbound msg.
@@ -71,15 +80,41 @@ func (m *MockPresentProofSvc) Actions() ([]presentproof.Action, error) {
 }
 
 // ActionContinue mock implementation of present proof service action continue interface.
-func (m *MockPresentProofSvc) ActionContinue(piID string, opt presentproof.Opt) error {
+func (m *MockPresentProofSvc) ActionContinue(piID string, opt ...presentproof.Opt) error {
 	if m.ActionContinueFunc != nil {
-		return m.ActionContinueFunc(piID, opt)
+		return m.ActionContinueFunc(piID, opt...)
 	}
 
 	return nil
 }
 
 // ActionStop mock implementation of present proof service action stop interface.
-func (m *MockPresentProofSvc) ActionStop(piID string, err error) error {
+func (m *MockPresentProofSvc) ActionStop(piID string, err error, opt ...presentproof.Opt) error {
+	return nil
+}
+
+// RegisterMsgEvent register message event.
+func (m *MockPresentProofSvc) RegisterMsgEvent(ch chan<- service.StateMsg) error {
+	if m.RegisterMsgEventErr != nil {
+		return m.RegisterMsgEventErr
+	}
+
+	if m.RegisterMsgEventHandle != nil {
+		return m.RegisterMsgEventHandle(ch)
+	}
+
+	return nil
+}
+
+// UnregisterMsgEvent unregister message event.
+func (m *MockPresentProofSvc) UnregisterMsgEvent(ch chan<- service.StateMsg) error {
+	if m.UnregisterMsgEventErr != nil {
+		return m.UnregisterMsgEventErr
+	}
+
+	if m.UnregisterMsgEventHandle != nil {
+		return m.UnregisterMsgEventHandle(ch)
+	}
+
 	return nil
 }

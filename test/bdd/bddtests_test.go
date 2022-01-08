@@ -20,6 +20,7 @@ import (
 	"github.com/hyperledger/aries-framework-go/pkg/common/log"
 	"github.com/hyperledger/aries-framework-go/test/bdd/agent"
 	"github.com/hyperledger/aries-framework-go/test/bdd/dockerutil"
+	"github.com/hyperledger/aries-framework-go/test/bdd/pkg/connection"
 	bddctx "github.com/hyperledger/aries-framework-go/test/bdd/pkg/context"
 	"github.com/hyperledger/aries-framework-go/test/bdd/pkg/didexchange"
 	"github.com/hyperledger/aries-framework-go/test/bdd/pkg/didresolver"
@@ -33,6 +34,7 @@ import (
 	"github.com/hyperledger/aries-framework-go/test/bdd/pkg/rfc0593"
 	"github.com/hyperledger/aries-framework-go/test/bdd/pkg/vdr"
 	"github.com/hyperledger/aries-framework-go/test/bdd/pkg/verifiable"
+	"github.com/hyperledger/aries-framework-go/test/bdd/pkg/webkms"
 )
 
 const (
@@ -87,7 +89,7 @@ func TestMain(m *testing.M) {
 	os.Exit(status)
 }
 
-//nolint:gocognit,forbidigo
+//nolint:gocognit,forbidigo,gocyclo
 func runBddTests(tags, format string) int {
 	return godog.RunWithOptions("godogs", func(s *godog.Suite) {
 		s.BeforeSuite(func() {
@@ -117,9 +119,14 @@ func runBddTests(tags, format string) int {
 			}
 		})
 		s.AfterSuite(func() {
+			err := os.Remove("docker-compose.log")
+			if err != nil {
+				fmt.Printf("unable to delete docker-compose.log: %v, proceeding with docker decompose..", err)
+			}
+
 			for _, c := range composition {
 				if c != nil {
-					if err := c.GenerateLogs(c.Dir, c.ProjectName+".log"); err != nil {
+					if err := c.GenerateLogs(c.Dir, c.Dir+"-"+c.ProjectName+".log"); err != nil {
 						panic(err)
 					}
 					if _, err := c.Decompose(c.Dir); err != nil {
@@ -202,5 +209,8 @@ func features() []feature {
 		rfc0593.NewRestSDKSteps(),
 		ld.NewLDControllerSteps(),
 		ld.NewSDKSteps(),
+		connection.NewSDKSteps(),
+		connection.NewControllerSteps(),
+		webkms.NewCryptoSDKSteps(),
 	}
 }

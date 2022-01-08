@@ -8,19 +8,23 @@ package service
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/mitchellh/mapstructure"
 
 	"github.com/hyperledger/aries-framework-go/pkg/doc/did"
 )
 
 const (
-	jsonID             = "@id"
-	jsonType           = "@type"
+	jsonIDV1           = "@id"
+	jsonIDV2           = "id"
+	jsonTypeV1         = "@type"
+	jsonTypeV2         = "type"
 	jsonThread         = "~thread"
 	jsonThreadID       = "thid"
 	jsonParentThreadID = "pthid"
@@ -28,6 +32,15 @@ const (
 
 	basePIURI = "https://didcomm.org/"
 	oldPIURI  = "did:sov:BzCbsNYhMrjHiqZDTUASHg;spec/"
+)
+
+// Version represents DIDComm protocol version.
+type Version string
+
+// DIDComm versions.
+const (
+	V1 Version = "v1"
+	V2 Version = "v2"
 )
 
 // Metadata may contain additional payload for the protocol. It might be populated by the client/protocol
@@ -80,11 +93,35 @@ func ParseDIDCommMsgMap(payload []byte) (DIDCommMsgMap, error) {
 	}
 
 	// Interop: accept old PIURI when it's used, as we handle backwards-compatibility at a more fine-grained level.
-	if typ := msg.Type(); typ != "" {
-		msg[jsonType] = strings.Replace(typ, oldPIURI, basePIURI, 1)
+	_, ok := msg[jsonTypeV1]
+	if typ := msg.Type(); typ != "" && ok {
+		msg[jsonTypeV1] = strings.Replace(typ, oldPIURI, basePIURI, 1)
 	}
 
 	return msg, nil
+}
+
+// IsDIDCommV2 returns true iff the message is a DIDComm/v2 message, false iff the message is a DIDComm/v1 message,
+// and an error if neither case applies.
+func IsDIDCommV2(msg *DIDCommMsgMap) (bool, error) {
+	_, hasIDV2 := (*msg)["id"]
+	_, hasTypeV2 := (*msg)["type"]
+	// TODO: some present-proof v3 messages forget to include the body, enable the hasBodyV2 check when that is fixed.
+	// TODO: see issue: https://github.com/hyperledger/aries-framework-go/issues/3039
+	// _, hasBodyV2 := (*msg)["body"]
+
+	if hasIDV2 || hasTypeV2 /* && hasBodyV2 */ {
+		return true, nil
+	}
+
+	_, hasIDV1 := (*msg)["@id"]
+	_, hasTypeV1 := (*msg)["@type"]
+
+	if hasIDV1 || hasTypeV1 {
+		return false, nil
+	}
+
+	return false, fmt.Errorf("not a valid didcomm v1 or v2 message")
 }
 
 // NewDIDCommMsgMap converts structure(model) to DIDCommMsgMap.
@@ -96,6 +133,21 @@ func NewDIDCommMsgMap(v interface{}) DIDCommMsgMap {
 	// sets empty metadata
 	msg[jsonMetadata] = map[string]interface{}{}
 
+	_, hasIDV1 := msg["@id"]
+	_, hasTypeV1 := msg["@type"]
+	_, hasIDV2 := msg["id"]
+	_, hasTypeV2 := msg["type"]
+
+	if hasIDV1 || hasIDV2 {
+		return msg
+	}
+
+	if hasTypeV2 && !hasIDV2 {
+		msg["id"] = uuid.New().String()
+	} else if hasTypeV1 && !hasIDV1 {
+		msg["@id"] = uuid.New().String()
+	}
+
 	return msg
 }
 
@@ -106,7 +158,35 @@ func (m DIDCommMsgMap) ThreadID() (string, error) {
 		return "", ErrInvalidMessage
 	}
 
-	msgID := m.ID()
+	thid, err := m.threadIDV1()
+	if err == nil || !errors.Is(err, ErrThreadIDNotFound) {
+		return thid, err
+	}
+
+	return m.threadIDV2()
+}
+
+func (m DIDCommMsgMap) threadIDV2() (string, error) {
+	id := m.idV2()
+
+	threadID, ok := m[jsonThreadID].(string)
+	if ok && threadID != "" {
+		if id == "" {
+			return "", ErrInvalidMessage
+		}
+
+		return threadID, nil
+	}
+
+	if id != "" {
+		return id, nil
+	}
+
+	return "", ErrThreadIDNotFound
+}
+
+func (m DIDCommMsgMap) threadIDV1() (string, error) {
+	msgID := m.idV1()
 	thread, ok := m[jsonThread].(map[string]interface{})
 
 	if ok && thread[jsonThreadID] != nil {
@@ -147,13 +227,12 @@ func (m DIDCommMsgMap) Metadata() map[string]interface{} {
 	return metadata
 }
 
-// Type returns the message type.
-func (m DIDCommMsgMap) Type() string {
-	if m == nil || m[jsonType] == nil {
+func (m DIDCommMsgMap) typeV1() string {
+	if m == nil || m[jsonTypeV1] == nil {
 		return ""
 	}
 
-	res, ok := m[jsonType].(string)
+	res, ok := m[jsonTypeV1].(string)
 	if !ok {
 		return ""
 	}
@@ -161,9 +240,40 @@ func (m DIDCommMsgMap) Type() string {
 	return res
 }
 
+func (m DIDCommMsgMap) typeV2() string {
+	if m == nil || m[jsonTypeV2] == nil {
+		return ""
+	}
+
+	res, ok := m[jsonTypeV2].(string)
+	if !ok {
+		return ""
+	}
+
+	return res
+}
+
+// Type returns the message type.
+func (m DIDCommMsgMap) Type() string {
+	if val := m.typeV1(); val != "" {
+		return val
+	}
+
+	return m.typeV2()
+}
+
 // ParentThreadID returns the message parent threadID.
 func (m DIDCommMsgMap) ParentThreadID() string {
-	if m == nil || m[jsonThread] == nil {
+	if m == nil {
+		return ""
+	}
+
+	parentThreadID, ok := m[jsonParentThreadID].(string)
+	if ok && parentThreadID != "" {
+		return parentThreadID
+	}
+
+	if m[jsonThread] == nil {
 		return ""
 	}
 
@@ -176,13 +286,12 @@ func (m DIDCommMsgMap) ParentThreadID() string {
 	return ""
 }
 
-// ID returns the message id.
-func (m DIDCommMsgMap) ID() string {
-	if m == nil || m[jsonID] == nil {
+func (m DIDCommMsgMap) idV1() string {
+	if m == nil || m[jsonIDV1] == nil {
 		return ""
 	}
 
-	res, ok := m[jsonID].(string)
+	res, ok := m[jsonIDV1].(string)
 	if !ok {
 		return ""
 	}
@@ -190,15 +299,119 @@ func (m DIDCommMsgMap) ID() string {
 	return res
 }
 
-// SetID sets the message id.
-func (m DIDCommMsgMap) SetID(id string) error {
-	if m == nil {
-		return ErrNilMessage
+func (m DIDCommMsgMap) idV2() string {
+	if m == nil || m[jsonIDV2] == nil {
+		return ""
 	}
 
-	m[jsonID] = id
+	res, ok := m[jsonIDV2].(string)
+	if !ok {
+		return ""
+	}
 
-	return nil
+	return res
+}
+
+// ID returns the message id.
+func (m DIDCommMsgMap) ID() string {
+	if val := m.idV1(); val != "" {
+		return val
+	}
+
+	return m.idV2()
+}
+
+// Opt represents an option.
+type Opt func(o *options)
+
+type options struct {
+	V Version
+}
+
+func getOptions(opts ...Opt) *options {
+	o := &options{}
+
+	for i := range opts {
+		opts[i](o)
+	}
+
+	if o.V == "" {
+		o.V = V1
+	}
+
+	return o
+}
+
+// WithVersion specifies which version to use.
+func WithVersion(v Version) Opt {
+	return func(o *options) {
+		o.V = v
+	}
+}
+
+// SetID sets the message id.
+func (m DIDCommMsgMap) SetID(id string, opts ...Opt) {
+	if m == nil {
+		return
+	}
+
+	o := getOptions(opts...)
+
+	if o.V == V2 {
+		m[jsonIDV2] = id
+
+		return
+	}
+
+	m[jsonIDV1] = id
+}
+
+// SetThread sets the message thread.
+func (m DIDCommMsgMap) SetThread(thid, pthid string, opts ...Opt) {
+	if m == nil {
+		return
+	}
+
+	if thid == "" && pthid == "" {
+		return
+	}
+
+	o := getOptions(opts...)
+
+	if o.V == V2 {
+		if thid != "" {
+			m[jsonThreadID] = thid
+		}
+
+		if pthid != "" {
+			m[jsonParentThreadID] = pthid
+		}
+
+		return
+	}
+
+	thread := map[string]interface{}{}
+
+	if thid != "" {
+		thread[jsonThreadID] = thid
+	}
+
+	if pthid != "" {
+		thread[jsonParentThreadID] = pthid
+	}
+
+	m[jsonThread] = thread
+}
+
+// UnsetThread unsets thread.
+func (m DIDCommMsgMap) UnsetThread() {
+	if m == nil {
+		return
+	}
+
+	delete(m, jsonThread)
+	delete(m, jsonThreadID)
+	delete(m, jsonParentThreadID)
 }
 
 // Decode converts message to  struct.

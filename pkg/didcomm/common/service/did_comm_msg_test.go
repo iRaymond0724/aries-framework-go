@@ -30,12 +30,21 @@ func TestDIDCommMsgMap_ID(t *testing.T) {
 			msg:  DIDCommMsgMap{},
 		},
 		{
+			name: "Bad type ID (old)",
+			msg:  DIDCommMsgMap{jsonIDV1: map[int]int{}},
+		},
+		{
 			name: "Bad type ID",
-			msg:  DIDCommMsgMap{jsonID: map[int]int{}},
+			msg:  DIDCommMsgMap{jsonIDV2: map[int]int{}},
+		},
+		{
+			name:     "Success (old)",
+			msg:      DIDCommMsgMap{jsonIDV1: "ID"},
+			expected: "ID",
 		},
 		{
 			name:     "Success",
-			msg:      DIDCommMsgMap{jsonID: "ID"},
+			msg:      DIDCommMsgMap{jsonIDV2: "ID"},
 			expected: "ID",
 		},
 	}
@@ -52,12 +61,81 @@ func TestDIDCommMsgMap_ID(t *testing.T) {
 func TestDIDCommMsgMap_SetID(t *testing.T) {
 	const ID = "ID"
 
-	require.EqualError(t, DIDCommMsgMap.SetID(nil, ID), ErrNilMessage.Error())
+	DIDCommMsgMap.SetID(nil, ID)
 
 	m := DIDCommMsgMap{}
+	m.SetID(ID)
 
-	require.NoError(t, m.SetID(ID))
 	require.Equal(t, ID, m.ID())
+}
+
+func TestDIDCommMsgMap_SetThread(t *testing.T) {
+	const (
+		ID  = "ID"
+		PID = "PID"
+	)
+
+	DIDCommMsgMap.SetThread(nil, ID, PID)
+
+	empty := DIDCommMsgMap{}
+	empty.SetThread("", "")
+	require.Equal(t, DIDCommMsgMap{}, empty)
+
+	m := DIDCommMsgMap{}
+	m.SetID("ID")
+	m.SetThread(ID, PID)
+
+	thid, err := m.ThreadID()
+	require.NoError(t, err)
+	require.Equal(t, ID, thid)
+	require.Equal(t, PID, m.ParentThreadID())
+
+	require.Equal(t, len(m), 2)
+	require.Equal(t, m[jsonIDV1], ID)
+	require.Equal(t, m[jsonThread].(map[string]interface{})[jsonThreadID], ID)
+	require.Equal(t, m[jsonThread].(map[string]interface{})[jsonParentThreadID], PID)
+}
+
+func TestDIDCommMsgMap_SetThreadV2(t *testing.T) {
+	const (
+		ID  = "ID"
+		PID = "PID"
+	)
+
+	DIDCommMsgMap.SetThread(nil, ID, PID, WithVersion(V2))
+
+	empty := DIDCommMsgMap{}
+	empty.SetThread("", "", WithVersion(V2))
+	require.Equal(t, DIDCommMsgMap{}, empty)
+
+	m := DIDCommMsgMap{}
+	m.SetID(ID, WithVersion(V2))
+	m.SetThread(ID, PID, WithVersion(V2))
+
+	thid, err := m.ThreadID()
+	require.NoError(t, err)
+	require.Equal(t, ID, thid)
+	require.Equal(t, PID, m.ParentThreadID())
+
+	require.Equal(t, len(m), 3)
+	require.Equal(t, m[jsonIDV2], ID)
+	require.Equal(t, m[jsonThreadID], ID)
+	require.Equal(t, m[jsonParentThreadID], PID)
+}
+
+func TestDIDCommMsgMap_UnsetThread(t *testing.T) {
+	const (
+		ID  = "ID"
+		PID = "PID"
+	)
+
+	DIDCommMsgMap.UnsetThread(nil)
+
+	m := DIDCommMsgMap{}
+	m.SetThread(ID, PID)
+	m.UnsetThread()
+
+	require.Equal(t, DIDCommMsgMap{}, m)
 }
 
 func TestDIDCommMsgMap_MetaData(t *testing.T) {
@@ -106,12 +184,21 @@ func TestDIDCommMsgMap_Type(t *testing.T) {
 			msg:  DIDCommMsgMap{},
 		},
 		{
+			name: "Bad type Type (old)",
+			msg:  DIDCommMsgMap{jsonTypeV1: map[int]int{}},
+		},
+		{
 			name: "Bad type Type",
-			msg:  DIDCommMsgMap{jsonType: map[int]int{}},
+			msg:  DIDCommMsgMap{jsonTypeV2: map[int]int{}},
+		},
+		{
+			name:     "Success (old)",
+			msg:      DIDCommMsgMap{jsonTypeV1: "Type"},
+			expected: "Type",
 		},
 		{
 			name:     "Success",
-			msg:      DIDCommMsgMap{jsonType: "Type"},
+			msg:      DIDCommMsgMap{jsonTypeV2: "Type"},
 			expected: "Type",
 		},
 	}
@@ -178,9 +265,22 @@ func TestDIDCommMsgMap_ParentThreadID(t *testing.T) {
 			msg:  DIDCommMsgMap{jsonThread: map[string]int{}},
 		},
 		{
+			name:     "Success (pthid)",
+			msg:      DIDCommMsgMap{jsonParentThreadID: "pID"},
+			expected: "pID",
+		},
+		{
 			name:     "Success",
 			msg:      DIDCommMsgMap{jsonThread: map[string]interface{}{jsonParentThreadID: "pthID"}},
 			expected: "pthID",
+		},
+		{
+			name: "Success (both are present)",
+			msg: DIDCommMsgMap{
+				jsonParentThreadID: "pID",
+				jsonThread:         map[string]interface{}{jsonParentThreadID: "pthID"},
+			},
+			expected: "pID",
 		},
 	}
 
@@ -248,6 +348,69 @@ func TestDIDCommMsgMap_ToJsonRawStruct(t *testing.T) {
 	err = msg.Decode(&req)
 	require.NoError(t, err)
 	require.NotEmpty(t, req.Data.Doc)
+}
+
+func TestIsDIDCommV2(t *testing.T) {
+	tests := []struct {
+		name   string
+		msg    DIDCommMsgMap
+		res    bool
+		errStr string
+	}{
+		{
+			name: "has v1 ID",
+			msg: DIDCommMsgMap{
+				"@id": "foo",
+			},
+			res:    false,
+			errStr: "",
+		},
+		{
+			name: "has v1 type",
+			msg: DIDCommMsgMap{
+				"@type": "foo",
+			},
+			res:    false,
+			errStr: "",
+		},
+		{
+			name: "has v2 ID",
+			msg: DIDCommMsgMap{
+				"id": "foo",
+			},
+			res:    true,
+			errStr: "",
+		},
+		{
+			name: "has v2 type",
+			msg: DIDCommMsgMap{
+				"type": "foo",
+			},
+			res:    true,
+			errStr: "",
+		},
+		{
+			name:   "error on empty message",
+			msg:    DIDCommMsgMap{},
+			res:    false,
+			errStr: "not a valid didcomm v1 or v2 message",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			res, err := IsDIDCommV2(&tc.msg)
+
+			require.Equal(t, tc.res, res)
+
+			if tc.errStr == "" {
+				require.NoError(t, err)
+			} else {
+				require.Error(t, err)
+				require.Contains(t, err.Error(), tc.errStr)
+			}
+		})
+	}
 }
 
 func TestDIDCommMsgMap_MarshalJSON(t *testing.T) {

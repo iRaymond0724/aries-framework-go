@@ -25,6 +25,7 @@ import (
 	"github.com/hyperledger/aries-framework-go/pkg/didcomm/common/service"
 	"github.com/hyperledger/aries-framework-go/pkg/didcomm/protocol/decorator"
 	"github.com/hyperledger/aries-framework-go/pkg/didcomm/protocol/mediator"
+	"github.com/hyperledger/aries-framework-go/pkg/didcomm/transport"
 	"github.com/hyperledger/aries-framework-go/pkg/doc/did"
 	"github.com/hyperledger/aries-framework-go/pkg/doc/util/kmsdidkey"
 	vdrapi "github.com/hyperledger/aries-framework-go/pkg/framework/aries/api/vdr"
@@ -101,6 +102,32 @@ func TestServiceNew(t *testing.T) {
 	})
 }
 
+func TestService_Initialize(t *testing.T) {
+	t.Run("success: already initialized", func(t *testing.T) {
+		prov := &protocol.MockProvider{
+			ServiceMap: map[string]interface{}{
+				mediator.Coordination: &mockroute.MockMediatorSvc{},
+			},
+		}
+
+		svc, err := New(prov)
+		require.NoError(t, err)
+
+		require.NoError(t, svc.Initialize(prov))
+	})
+
+	t.Run("fail: provider of wrong type", func(t *testing.T) {
+		prov := "this is not a provider"
+
+		svc := Service{}
+
+		err := svc.Initialize(prov)
+
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "expected provider of type")
+	})
+}
+
 // did-exchange flow with role Inviter.
 func TestService_Handle_Inviter(t *testing.T) {
 	mockStore := &mockstorage.MockStore{Store: make(map[string]mockstorage.DBEntry)}
@@ -125,8 +152,9 @@ func TestService_Handle_Inviter(t *testing.T) {
 	}
 
 	verPubKey, encPubKey := newSigningAndEncryptionDIDKeys(t, ctx)
+	mtp := transport.MediaTypeRFC0019EncryptedEnvelope
 
-	ctx.vdRegistry = &mockvdr.MockVDRegistry{CreateValue: createDIDDocWithKey(verPubKey, encPubKey)}
+	ctx.vdRegistry = &mockvdr.MockVDRegistry{CreateValue: createDIDDocWithKey(verPubKey, encPubKey, mtp)}
 
 	connRec, err := connection.NewRecorder(prov)
 	require.NoError(t, err)
@@ -301,17 +329,20 @@ func TestService_Handle_Invitee(t *testing.T) {
 		KeyAgreementTypeValue: kms.X25519ECDHKWType,
 	}
 
+	mtp := transport.MediaTypeRFC0019EncryptedEnvelope
+
 	ctx := &context{
 		outboundDispatcher: prov.OutboundDispatcher(),
 		crypto:             &tinkcrypto.Crypto{},
 		kms:                k,
 		keyType:            kms.ED25519Type,
 		keyAgreementType:   kms.X25519ECDHKWType,
+		mediaTypeProfiles:  []string{mtp},
 	}
 
 	verPubKey, encPubKey := newSigningAndEncryptionDIDKeys(t, ctx)
 
-	ctx.vdRegistry = &mockvdr.MockVDRegistry{CreateValue: createDIDDocWithKey(verPubKey, encPubKey)}
+	ctx.vdRegistry = &mockvdr.MockVDRegistry{CreateValue: createDIDDocWithKey(verPubKey, encPubKey, mtp)}
 
 	connRec, err := connection.NewRecorder(prov)
 	require.NoError(t, err)
@@ -2022,10 +2053,11 @@ func TestService_CreateImplicitInvitation(t *testing.T) {
 			routeSvc:           routeSvc,
 			keyType:            kms.ED25519Type,
 			keyAgreementType:   kms.X25519ECDHKWType,
+			mediaTypeProfiles:  []string{transport.MediaTypeRFC0019EncryptedEnvelope},
 		}
 
 		verPubKey, encPubKey := newSigningAndEncryptionDIDKeys(t, ctx)
-		newDIDDoc := createDIDDocWithKey(verPubKey, encPubKey)
+		newDIDDoc := createDIDDocWithKey(verPubKey, encPubKey, ctx.mediaTypeProfiles[0])
 
 		connRec, err := connection.NewRecorder(prov)
 		require.NoError(t, err)
@@ -2063,9 +2095,10 @@ func TestService_CreateImplicitInvitation(t *testing.T) {
 			routeSvc:           routeSvc,
 			keyType:            kms.ED25519Type,
 			keyAgreementType:   kms.X25519ECDHKWType,
+			mediaTypeProfiles:  []string{transport.MediaTypeRFC0019EncryptedEnvelope},
 		}
 		verPubKey, encPubKey := newSigningAndEncryptionDIDKeys(t, ctx)
-		newDIDDoc := createDIDDocWithKey(verPubKey, encPubKey)
+		newDIDDoc := createDIDDocWithKey(verPubKey, encPubKey, ctx.mediaTypeProfiles[0])
 
 		connRec, err := connection.NewRecorder(prov)
 		require.NoError(t, err)
@@ -2093,9 +2126,10 @@ func TestService_CreateImplicitInvitation(t *testing.T) {
 		sp := mockstorage.NewMockStoreProvider()
 		k := newKMS(t, sp)
 		ctx := &context{
-			kms:              k,
-			keyType:          kms.ED25519Type,
-			keyAgreementType: kms.X25519ECDHKWType,
+			kms:               k,
+			keyType:           kms.ED25519Type,
+			keyAgreementType:  kms.X25519ECDHKWType,
+			mediaTypeProfiles: []string{transport.MediaTypeRFC0019EncryptedEnvelope},
 		}
 		routeSvc := &mockroute.MockMediatorSvc{}
 		protocolStateStore := mockstorage.NewMockStoreProvider()
@@ -2113,7 +2147,7 @@ func TestService_CreateImplicitInvitation(t *testing.T) {
 		ctx.routeSvc = routeSvc
 
 		verPubKey, encPubKey := newSigningAndEncryptionDIDKeys(t, ctx)
-		newDIDDoc := createDIDDocWithKey(verPubKey, encPubKey)
+		newDIDDoc := createDIDDocWithKey(verPubKey, encPubKey, ctx.mediaTypeProfiles[0])
 
 		connRec, err := connection.NewRecorder(prov)
 		require.NoError(t, err)
@@ -2155,9 +2189,10 @@ func TestRespondTo(t *testing.T) {
 	})
 	t.Run("responds to an implicit invitation", func(t *testing.T) {
 		publicDID := createDIDDoc(t, &context{
-			kms:              k,
-			keyType:          kms.ED25519Type,
-			keyAgreementType: kms.X25519ECDHKWType,
+			kms:               k,
+			keyType:           kms.ED25519Type,
+			keyAgreementType:  kms.X25519ECDHKWType,
+			mediaTypeProfiles: []string{transport.MediaTypeRFC0019EncryptedEnvelope},
 		})
 		provider := testProvider()
 		provider.CustomVDR = &mockvdr.MockVDRegistry{ResolveValue: publicDID}

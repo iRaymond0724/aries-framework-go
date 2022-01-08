@@ -100,3 +100,13 @@ type KeyPair struct {
 	// base64 encoded public key of the key pair created.
 	PublicKey string `json:"publicKey,omitempty"`
 }
+
+// CredentialInteractionStatus holds the status of credential share/issuance interaction from wallet.
+// Typically holds web redirect info of credential interaction conclusion or problem-report.
+type CredentialInteractionStatus struct {
+	// One of the status present proof or issue credential interaction
+	// Refer https://github.com/hyperledger/aries-rfcs/blob/main/features/0015-acks/README.md#ack-status.
+	Status string `json:"status"`
+	// Optional web redirect URL info sent by verifier.
+	RedirectURL string `json:"url,omitempty"`
+}

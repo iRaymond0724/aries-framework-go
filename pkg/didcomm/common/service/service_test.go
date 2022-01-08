@@ -36,6 +36,10 @@ func TestParseDIDCommMsgMap(t *testing.T) {
 		name:    "Array payload",
 		payload: []byte(`[]`),
 		err:     `invalid payload data format: json: cannot unmarshal array into Go value of type map[string]interface`,
+	}, {
+		name:    "Type",
+		payload: []byte(`{"@type":"type"}`),
+		err:     "",
 	}}
 
 	t.Parallel()
@@ -174,6 +178,76 @@ func TestNewDIDCommMsgMap(t *testing.T) {
 			require.Equal(t, eResMap, vResMap)
 		})
 	}
+
+	idTests := []struct {
+		name    string
+		payload interface{}
+		version Version
+	}{
+		{
+			name: "v1 with ID",
+			payload: struct {
+				ID   string `json:"@id"`
+				Type string `json:"@type"`
+			}{
+				ID:   "foobar",
+				Type: "blahblah",
+			},
+			version: V1,
+		},
+		{
+			name: "v2 with ID",
+			payload: struct {
+				ID   string `json:"id"`
+				Type string `json:"type"`
+			}{
+				ID:   "foobar",
+				Type: "blahblah",
+			},
+			version: V2,
+		},
+		{
+			name: "v1 without ID",
+			payload: struct {
+				Type string `json:"@type"`
+			}{
+				Type: "blahblah",
+			},
+			version: V1,
+		},
+		{
+			name: "v2 without ID",
+			payload: struct {
+				Type string `json:"type"`
+			}{
+				Type: "blahblah",
+			},
+			version: V2,
+		},
+	}
+
+	for _, tc := range idTests {
+		t.Run(tc.name, func(t *testing.T) {
+			msg := NewDIDCommMsgMap(tc.payload)
+
+			_, hasIDV1 := msg["@id"]
+			_, hasIDV2 := msg["id"]
+
+			isV2, err := IsDIDCommV2(&msg)
+			require.NoError(t, err)
+
+			switch tc.version {
+			case V1:
+				require.True(t, hasIDV1)
+				require.False(t, hasIDV2)
+				require.False(t, isV2)
+			case V2:
+				require.False(t, hasIDV1)
+				require.True(t, hasIDV2)
+				require.True(t, isV2)
+			}
+		})
+	}
 }
 
 func TestDIDCommMsg_ThreadID(t *testing.T) {
@@ -187,15 +261,40 @@ func TestDIDCommMsg_ThreadID(t *testing.T) {
 		msg:  nil,
 		err:  ErrInvalidMessage.Error(),
 	}, {
-		name: "ID without Thread ID",
-		msg:  DIDCommMsgMap{jsonID: "ID"},
+		name: "old ID without Thread ID",
+		msg:  DIDCommMsgMap{jsonIDV1: "ID"},
 		val:  "ID",
 		err:  "",
 	}, {
+		name: "ID without Thread ID",
+		msg:  DIDCommMsgMap{jsonIDV2: "ID"},
+		val:  "ID",
+		err:  "",
+	}, {
+		name: "Thread ID",
+		msg:  DIDCommMsgMap{jsonThreadID: "tID"},
+		val:  "",
+		err:  ErrInvalidMessage.Error(),
+	}, {
 		name: "Thread ID with ID",
-		msg:  DIDCommMsgMap{jsonID: "ID", jsonThread: map[string]interface{}{jsonThreadID: "thID"}},
+		msg:  DIDCommMsgMap{jsonIDV2: "ID", jsonThreadID: "tID"},
+		val:  "tID",
+		err:  "",
+	}, {
+		name: "Thread ID with old ID",
+		msg:  DIDCommMsgMap{jsonIDV1: "ID", jsonThreadID: "tID"},
+		val:  "ID",
+		err:  "",
+	}, {
+		name: "Thread ID with old ID",
+		msg:  DIDCommMsgMap{jsonIDV1: "ID", jsonThread: map[string]interface{}{jsonThreadID: "thID"}},
 		val:  "thID",
 		err:  "",
+	}, {
+		name: "Thread ID with ID",
+		msg:  DIDCommMsgMap{jsonIDV2: "ID", jsonThread: map[string]interface{}{jsonThreadID: "thID"}},
+		val:  "",
+		err:  ErrInvalidMessage.Error(),
 	}, {
 		name: "Thread ID without ID",
 		msg:  DIDCommMsgMap{jsonThread: map[string]interface{}{jsonThreadID: "thID"}},

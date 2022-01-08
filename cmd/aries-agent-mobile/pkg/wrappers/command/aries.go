@@ -30,7 +30,9 @@ import (
 	"github.com/hyperledger/aries-framework-go/pkg/controller/command/mediator"
 	"github.com/hyperledger/aries-framework-go/pkg/controller/command/messaging"
 	"github.com/hyperledger/aries-framework-go/pkg/controller/command/outofband"
+	"github.com/hyperledger/aries-framework-go/pkg/controller/command/outofbandv2"
 	"github.com/hyperledger/aries-framework-go/pkg/controller/command/presentproof"
+	"github.com/hyperledger/aries-framework-go/pkg/controller/command/vcwallet"
 	"github.com/hyperledger/aries-framework-go/pkg/controller/command/vdr"
 	"github.com/hyperledger/aries-framework-go/pkg/controller/command/verifiable"
 	"github.com/hyperledger/aries-framework-go/pkg/didcomm/messaging/msghandler"
@@ -53,6 +55,8 @@ type Aries struct {
 
 // NewAries returns a new Aries instance that contains handlers and an Aries framework instance.
 func NewAries(opts *config.Options) (*Aries, error) {
+	opts.MsgHandler = msghandler.NewRegistrar()
+
 	options, err := prepareFrameworkOptions(opts)
 	if err != nil {
 		return nil, fmt.Errorf("failed to prepare framework options: %w", err)
@@ -73,6 +77,7 @@ func NewAries(opts *config.Options) (*Aries, error) {
 	commandHandlers, err := controller.GetCommandHandlers(context,
 		controller.WithNotifier(notifier.NewNotifier(notifications)),
 		controller.WithAutoAccept(opts.AutoAccept),
+		controller.WithMessageHandler(opts.MsgHandler),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get command handlers: %w", err)
@@ -94,10 +99,8 @@ func NewAries(opts *config.Options) (*Aries, error) {
 }
 
 func prepareFrameworkOptions(opts *config.Options) ([]aries.Option, error) {
-	msgHandler := msghandler.NewRegistrar()
-
 	var options []aries.Option
-	options = append(options, aries.WithMessageServiceProvider(msgHandler))
+	options = append(options, aries.WithMessageServiceProvider(opts.MsgHandler))
 
 	if opts.TransportReturnRoute != "" {
 		options = append(options, aries.WithTransportReturnRoute(opts.TransportReturnRoute))
@@ -318,6 +321,16 @@ func (a *Aries) GetOutOfBandController() (api.OutOfBandController, error) {
 	return &OutOfBand{handlers: handlers}, nil
 }
 
+// GetOutOfBandV2Controller returns a OutOfBandV2 instance.
+func (a *Aries) GetOutOfBandV2Controller() (api.OutOfBandV2Controller, error) {
+	handlers, ok := a.handlers[outofbandv2.CommandName]
+	if !ok {
+		return nil, fmt.Errorf("no handlers found for controller [%s]", outofbandv2.CommandName)
+	}
+
+	return &OutOfBandV2{handlers: handlers}, nil
+}
+
 // GetKMSController returns a KMS instance.
 func (a *Aries) GetKMSController() (api.KMSController, error) {
 	handlers, ok := a.handlers[kms.CommandName]
@@ -336,4 +349,14 @@ func (a *Aries) GetLDController() (api.LDController, error) {
 	}
 
 	return &LD{handlers: handlers}, nil
+}
+
+// GetVCWalletController returns a VCWalletController instance.
+func (a *Aries) GetVCWalletController() (api.VCWalletController, error) {
+	handlers, ok := a.handlers[vcwallet.CommandName]
+	if !ok {
+		return nil, fmt.Errorf("no handlers found for controller [%s]", vcwallet.CommandName)
+	}
+
+	return &VCWallet{handlers: handlers}, nil
 }

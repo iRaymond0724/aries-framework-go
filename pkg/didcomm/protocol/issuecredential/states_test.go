@@ -97,7 +97,7 @@ func TestAbandoning_ExecuteInbound(t *testing.T) {
 		md.Msg = service.NewDIDCommMsgMap(struct{}{})
 
 		thID := uuid.New().String()
-		require.NoError(t, md.Msg.SetID(thID))
+		md.Msg.SetID(thID)
 
 		followup, action, err := (&abandoning{Code: codeInternalError}).ExecuteInbound(md)
 		require.NoError(t, err)
@@ -114,7 +114,7 @@ func TestAbandoning_ExecuteInbound(t *testing.T) {
 				r := &model.ProblemReport{}
 				require.NoError(t, msg.Decode(r))
 				require.Equal(t, codeInternalError, r.Description.Code)
-				require.Equal(t, ProblemReportMsgType, r.Type)
+				require.Equal(t, ProblemReportMsgTypeV2, r.Type)
 
 				return nil
 			})
@@ -134,7 +134,7 @@ func TestAbandoning_ExecuteInbound(t *testing.T) {
 		md.Msg = service.NewDIDCommMsgMap(struct{}{})
 
 		thID := uuid.New().String()
-		require.NoError(t, md.Msg.SetID(thID))
+		md.Msg.SetID(thID)
 
 		followup, action, err := (&abandoning{Code: codeInternalError}).ExecuteInbound(md)
 		require.NoError(t, err)
@@ -151,7 +151,7 @@ func TestAbandoning_ExecuteInbound(t *testing.T) {
 				r := &model.ProblemReport{}
 				require.NoError(t, msg.Decode(r))
 				require.Equal(t, codeRejectedError, r.Description.Code)
-				require.Equal(t, ProblemReportMsgType, r.Type)
+				require.Equal(t, ProblemReportMsgTypeV2, r.Type)
 
 				return nil
 			})
@@ -162,8 +162,7 @@ func TestAbandoning_ExecuteInbound(t *testing.T) {
 	t.Run("Without code", func(t *testing.T) {
 		md := &MetaData{}
 		md.Msg = service.NewDIDCommMsgMap(struct{}{})
-
-		require.NoError(t, md.Msg.SetID(uuid.New().String()))
+		md.Msg.SetID(uuid.New().String())
 
 		followup, action, err := (&abandoning{}).ExecuteInbound(md)
 		require.NoError(t, err)
@@ -277,7 +276,7 @@ func TestOfferSent_CanTransitionTo(t *testing.T) {
 
 func TestOfferSent_ExecuteInbound(t *testing.T) {
 	t.Run("Success", func(t *testing.T) {
-		followup, action, err := (&offerSent{}).ExecuteInbound(&MetaData{offerCredential: &OfferCredential{}})
+		followup, action, err := (&offerSent{}).ExecuteInbound(&MetaData{offerCredentialV2: &OfferCredentialV2{}})
 		require.NoError(t, err)
 		require.Equal(t, &noOp{}, followup)
 		require.NotNil(t, action)
@@ -286,7 +285,7 @@ func TestOfferSent_ExecuteInbound(t *testing.T) {
 		defer ctrl.Finish()
 
 		messenger := serviceMocks.NewMockMessenger(ctrl)
-		messenger.EXPECT().ReplyToMsg(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any())
+		messenger.EXPECT().ReplyToMsg(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any())
 
 		require.NoError(t, action(messenger))
 	})
@@ -309,7 +308,7 @@ func TestOfferSent_ExecuteOutbound(t *testing.T) {
 	defer ctrl.Finish()
 
 	messenger := serviceMocks.NewMockMessenger(ctrl)
-	messenger.EXPECT().Send(gomock.Any(), gomock.Any(), gomock.Any())
+	messenger.EXPECT().Send(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any())
 
 	require.NoError(t, action(messenger))
 }
@@ -336,7 +335,7 @@ func TestRequestReceived_CanTransitionTo(t *testing.T) {
 
 func TestRequestReceived_ExecuteInbound(t *testing.T) {
 	t.Run("Successes", func(t *testing.T) {
-		followup, action, err := (&requestReceived{}).ExecuteInbound(&MetaData{issueCredential: &IssueCredential{}})
+		followup, action, err := (&requestReceived{}).ExecuteInbound(&MetaData{issueCredentialV2: &IssueCredentialV2{}})
 		require.NoError(t, err)
 		require.Equal(t, &credentialIssued{}, followup)
 		require.NotNil(t, action)
@@ -345,7 +344,7 @@ func TestRequestReceived_ExecuteInbound(t *testing.T) {
 		defer ctrl.Finish()
 
 		messenger := serviceMocks.NewMockMessenger(ctrl)
-		messenger.EXPECT().ReplyToMsg(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any())
+		messenger.EXPECT().ReplyToMsg(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any())
 
 		require.NoError(t, action(messenger))
 	})
@@ -421,7 +420,7 @@ func TestProposalSent_CanTransitionTo(t *testing.T) {
 
 func TestProposalSent_ExecuteInbound(t *testing.T) {
 	t.Run("Successes", func(t *testing.T) {
-		followup, action, err := (&proposalSent{}).ExecuteInbound(&MetaData{proposeCredential: &ProposeCredential{}})
+		followup, action, err := (&proposalSent{}).ExecuteInbound(&MetaData{proposeCredentialV2: &ProposeCredentialV2{}})
 		require.NoError(t, err)
 		require.Equal(t, &noOp{}, followup)
 		require.NotNil(t, action)
@@ -430,7 +429,7 @@ func TestProposalSent_ExecuteInbound(t *testing.T) {
 		defer ctrl.Finish()
 
 		messenger := serviceMocks.NewMockMessenger(ctrl)
-		messenger.EXPECT().ReplyToMsg(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any())
+		messenger.EXPECT().ReplyToMsg(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any())
 
 		require.NoError(t, action(messenger))
 	})
@@ -453,7 +452,7 @@ func TestProposalSent_ExecuteOutbound(t *testing.T) {
 	defer ctrl.Finish()
 
 	messenger := serviceMocks.NewMockMessenger(ctrl)
-	messenger.EXPECT().Send(gomock.Any(), gomock.Any(), gomock.Any())
+	messenger.EXPECT().Send(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any())
 
 	require.NoError(t, action(messenger))
 }
@@ -483,7 +482,7 @@ func TestOfferReceived_ExecuteInbound(t *testing.T) {
 		msg := service.NewDIDCommMsgMap(struct{}{})
 
 		followup, action, err := (&offerReceived{}).ExecuteInbound(&MetaData{
-			proposeCredential: &ProposeCredential{},
+			proposeCredentialV2: &ProposeCredentialV2{},
 			transitionalPayload: transitionalPayload{
 				Action: Action{Msg: msg},
 			},
@@ -503,7 +502,7 @@ func TestOfferReceived_ExecuteInbound(t *testing.T) {
 		defer ctrl.Finish()
 
 		messenger := serviceMocks.NewMockMessenger(ctrl)
-		messenger.EXPECT().ReplyToMsg(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any())
+		messenger.EXPECT().ReplyToMsg(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any())
 
 		require.NoError(t, action(messenger))
 	})
@@ -565,7 +564,7 @@ func TestRequestSent_ExecuteOutbound(t *testing.T) {
 	defer ctrl.Finish()
 
 	messenger := serviceMocks.NewMockMessenger(ctrl)
-	messenger.EXPECT().Send(gomock.Any(), gomock.Any(), gomock.Any())
+	messenger.EXPECT().Send(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any())
 
 	require.NoError(t, action(messenger))
 }
@@ -592,7 +591,7 @@ func TestCredentialReceived_CanTransitionTo(t *testing.T) {
 
 func TestCredentialReceived_ExecuteInbound(t *testing.T) {
 	t.Run("Successes", func(t *testing.T) {
-		followup, action, err := (&credentialReceived{}).ExecuteInbound(&MetaData{issueCredential: &IssueCredential{}})
+		followup, action, err := (&credentialReceived{}).ExecuteInbound(&MetaData{issueCredentialV2: &IssueCredentialV2{}})
 		require.NoError(t, err)
 		require.Equal(t, &done{}, followup)
 		require.NotNil(t, action)
@@ -601,7 +600,7 @@ func TestCredentialReceived_ExecuteInbound(t *testing.T) {
 		defer ctrl.Finish()
 
 		messenger := serviceMocks.NewMockMessenger(ctrl)
-		messenger.EXPECT().ReplyToMsg(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any())
+		messenger.EXPECT().ReplyToMsg(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any())
 
 		require.NoError(t, action(messenger))
 	})

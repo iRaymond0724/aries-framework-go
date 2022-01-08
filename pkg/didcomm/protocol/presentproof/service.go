@@ -10,11 +10,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 
 	"github.com/hyperledger/aries-framework-go/pkg/common/log"
 	"github.com/hyperledger/aries-framework-go/pkg/didcomm/common/service"
+	"github.com/hyperledger/aries-framework-go/pkg/didcomm/protocol/decorator"
 	"github.com/hyperledger/aries-framework-go/pkg/doc/verifiable"
 	"github.com/hyperledger/aries-framework-go/spi/storage"
 )
@@ -22,25 +24,47 @@ import (
 const (
 	// Name defines the protocol name.
 	Name = "present-proof"
-	// Spec defines the protocol spec.
-	Spec = "https://didcomm.org/present-proof/2.0/"
-	// ProposePresentationMsgType defines the protocol propose-presentation message type.
-	ProposePresentationMsgType = Spec + "propose-presentation"
-	// RequestPresentationMsgType defines the protocol request-presentation message type.
-	RequestPresentationMsgType = Spec + "request-presentation"
-	// PresentationMsgType defines the protocol presentation message type.
-	PresentationMsgType = Spec + "presentation"
-	// AckMsgType defines the protocol ack message type.
-	AckMsgType = Spec + "ack"
-	// ProblemReportMsgType defines the protocol problem-report message type.
-	ProblemReportMsgType = Spec + "problem-report"
-	// PresentationPreviewMsgType defines the protocol presentation-preview inner object type.
-	PresentationPreviewMsgType = Spec + "presentation-preview"
+	// SpecV2 defines the protocol spec.
+	SpecV2 = "https://didcomm.org/present-proof/2.0/"
+	// ProposePresentationMsgTypeV2 defines the protocol propose-presentation message type.
+	ProposePresentationMsgTypeV2 = SpecV2 + "propose-presentation"
+	// RequestPresentationMsgTypeV2 defines the protocol request-presentation message type.
+	RequestPresentationMsgTypeV2 = SpecV2 + "request-presentation"
+	// PresentationMsgTypeV2 defines the protocol presentation message type.
+	PresentationMsgTypeV2 = SpecV2 + "presentation"
+	// AckMsgTypeV2 defines the protocol ack message type.
+	AckMsgTypeV2 = SpecV2 + "ack"
+	// ProblemReportMsgTypeV2 defines the protocol problem-report message type.
+	ProblemReportMsgTypeV2 = SpecV2 + "problem-report"
+	// PresentationPreviewMsgTypeV2 defines the protocol presentation-preview inner object type.
+	PresentationPreviewMsgTypeV2 = SpecV2 + "presentation-preview"
+
+	// SpecV3 defines the protocol spec.
+	SpecV3 = "https://didcomm.org/present-proof/3.0/"
+	// ProposePresentationMsgTypeV3 defines the protocol propose-presentation message type.
+	ProposePresentationMsgTypeV3 = SpecV3 + "propose-presentation"
+	// RequestPresentationMsgTypeV3 defines the protocol request-presentation message type.
+	RequestPresentationMsgTypeV3 = SpecV3 + "request-presentation"
+	// PresentationMsgTypeV3 defines the protocol presentation message type.
+	PresentationMsgTypeV3 = SpecV3 + "presentation"
+	// AckMsgTypeV3 defines the protocol ack message type.
+	AckMsgTypeV3 = SpecV3 + "ack"
+	// ProblemReportMsgTypeV3 defines the protocol problem-report message type.
+	ProblemReportMsgTypeV3 = SpecV3 + "problem-report"
+	// PresentationPreviewMsgTypeV3 defines the protocol presentation-preview inner object type.
+	PresentationPreviewMsgTypeV3 = SpecV3 + "presentation-preview"
 )
 
 const (
 	internalDataKey        = "internal_data_"
 	transitionalPayloadKey = "transitionalPayload_%s"
+)
+
+type version string
+
+const (
+	version2 = version("present-proof V2")
+	version3 = version("present-proof V3")
 )
 
 // nolint:gochecknoglobals
@@ -58,21 +82,35 @@ type customError struct{ error }
 // transitionalPayload keeps payload needed for Continue function to proceed with the action.
 type transitionalPayload struct {
 	Action
-	StateName   string
-	AckRequired bool
+	StateName       string
+	AckRequired     bool
+	Direction       messageDirection
+	ProtocolVersion version
+	Properties      map[string]interface{}
 }
+
+type messageDirection string
+
+const (
+	inboundMessage  = messageDirection("InboundMessage")
+	outboundMessage = messageDirection("OutboundMessage")
+)
 
 // metaData type to store data for internal usage.
 type metaData struct {
 	transitionalPayload
-	state               state
-	presentationNames   []string
-	properties          map[string]interface{}
-	msgClone            service.DIDCommMsg
-	presentation        *Presentation
-	proposePresentation *ProposePresentation
-	request             *RequestPresentation
-	addProofFn          func(presentation *verifiable.Presentation) error
+	state                 state
+	presentationNames     []string
+	properties            map[string]interface{}
+	msgClone              service.DIDCommMsg
+	presentation          *PresentationV2
+	proposePresentation   *ProposePresentationV2
+	request               *RequestPresentationV2
+	presentationV3        *PresentationV3
+	proposePresentationV3 *ProposePresentationV3
+	requestV3             *RequestPresentationV3
+
+	addProofFn func(presentation *verifiable.Presentation) error
 	// err is used to determine whether callback was stopped
 	// e.g the user received an action event and executes Stop(err) function
 	// in that case `err` is equal to `err` which was passing to Stop function
@@ -83,16 +121,28 @@ func (md *metaData) Message() service.DIDCommMsg {
 	return md.msgClone
 }
 
-func (md *metaData) Presentation() *Presentation {
+func (md *metaData) Presentation() *PresentationV2 {
 	return md.presentation
 }
 
-func (md *metaData) ProposePresentation() *ProposePresentation {
+func (md *metaData) PresentationV3() *PresentationV3 {
+	return md.presentationV3
+}
+
+func (md *metaData) ProposePresentation() *ProposePresentationV2 {
 	return md.proposePresentation
 }
 
-func (md *metaData) RequestPresentation() *RequestPresentation {
+func (md *metaData) ProposePresentationV3() *ProposePresentationV3 {
+	return md.proposePresentationV3
+}
+
+func (md *metaData) RequestPresentation() *RequestPresentationV2 {
 	return md.request
+}
+
+func (md *metaData) RequestPresentationV3() *RequestPresentationV3 {
+	return md.requestV3
 }
 
 func (md *metaData) PresentationNames() []string {
@@ -124,10 +174,29 @@ type Action struct {
 type Opt func(md *metaData)
 
 // WithPresentation allows providing Presentation message
-// USAGE: This message can be provided after receiving a Invitation message.
-func WithPresentation(msg *Presentation) Opt {
+// USAGE: This message can be provided after receiving an Invitation message.
+func WithPresentation(pp *PresentationParams) Opt {
 	return func(md *metaData) {
-		md.presentation = msg
+		switch md.ProtocolVersion {
+		default:
+			fallthrough
+		case version2:
+			md.presentation = &PresentationV2{
+				Type:                PresentationMsgTypeV2,
+				Comment:             pp.Comment,
+				Formats:             pp.Formats,
+				PresentationsAttach: decorator.GenericAttachmentsToV1(pp.Attachments),
+			}
+		case version3:
+			md.presentationV3 = &PresentationV3{
+				Type: PresentationMsgTypeV3,
+				Body: PresentationV3Body{
+					GoalCode: pp.GoalCode,
+					Comment:  pp.Comment,
+				},
+				Attachments: decorator.GenericAttachmentsToV2(pp.Attachments),
+			}
+		}
 	}
 }
 
@@ -149,18 +218,60 @@ func WithMultiOptions(opts ...Opt) Opt {
 }
 
 // WithProposePresentation allows providing ProposePresentation message
-// USAGE: This message can be provided after receiving a Invitation message.
-func WithProposePresentation(msg *ProposePresentation) Opt {
+// USAGE: This message can be provided after receiving an Invitation message.
+func WithProposePresentation(pp *ProposePresentationParams) Opt {
 	return func(md *metaData) {
-		md.proposePresentation = msg
+		switch md.ProtocolVersion {
+		default:
+			fallthrough
+		case version2:
+			md.proposePresentation = &ProposePresentationV2{
+				Type:            ProposePresentationMsgTypeV2,
+				Comment:         pp.Comment,
+				Formats:         pp.Formats,
+				ProposalsAttach: decorator.GenericAttachmentsToV1(pp.Attachments),
+			}
+		case version3:
+			md.proposePresentationV3 = &ProposePresentationV3{
+				Type: ProposePresentationMsgTypeV3,
+				Body: ProposePresentationV3Body{
+					GoalCode: pp.GoalCode,
+					Comment:  pp.Comment,
+				},
+				Attachments: decorator.GenericAttachmentsToV2(pp.Attachments),
+			}
+		}
 	}
 }
 
 // WithRequestPresentation allows providing RequestPresentation message
 // USAGE: This message can be provided after receiving a propose message.
-func WithRequestPresentation(msg *RequestPresentation) Opt {
+func WithRequestPresentation(msg *RequestPresentationParams) Opt {
 	return func(md *metaData) {
-		md.request = msg
+		switch md.ProtocolVersion {
+		default:
+			fallthrough
+		case version2:
+			md.request = &RequestPresentationV2{
+				ID:                         uuid.New().String(),
+				Type:                       RequestPresentationMsgTypeV2,
+				Comment:                    msg.Comment,
+				WillConfirm:                msg.WillConfirm,
+				Formats:                    msg.Formats,
+				RequestPresentationsAttach: decorator.GenericAttachmentsToV1(msg.Attachments),
+			}
+		case version3:
+			md.requestV3 = &RequestPresentationV3{
+				ID:   uuid.New().String(),
+				Type: RequestPresentationMsgTypeV3,
+				Body: RequestPresentationV3Body{
+					GoalCode:    msg.GoalCode,
+					Comment:     msg.Comment,
+					WillConfirm: msg.WillConfirm,
+				},
+				Attachments: decorator.GenericAttachmentsToV2(msg.Attachments),
+			}
+		}
 	}
 }
 
@@ -168,6 +279,21 @@ func WithRequestPresentation(msg *RequestPresentation) Opt {
 func WithFriendlyNames(names ...string) Opt {
 	return func(md *metaData) {
 		md.presentationNames = names
+	}
+}
+
+// WithProperties allows providing custom properties.
+func WithProperties(props map[string]interface{}) Opt {
+	return func(md *metaData) {
+		if len(md.properties) == 0 {
+			md.properties = props
+
+			return
+		}
+
+		for k, v := range props {
+			md.properties[k] = v
+		}
 	}
 }
 
@@ -181,35 +307,57 @@ type Provider interface {
 type Service struct {
 	service.Action
 	service.Message
-	store      storage.Store
-	callbacks  chan *metaData
-	messenger  service.Messenger
-	middleware Handler
+	store       storage.Store
+	callbacks   chan *metaData
+	messenger   service.Messenger
+	middleware  Handler
+	initialized bool
 }
 
 // New returns the presentproof service.
 func New(p Provider) (*Service, error) {
-	store, err := p.StorageProvider().OpenStore(Name)
+	svc := Service{}
+
+	err := svc.Initialize(p)
 	if err != nil {
 		return nil, err
 	}
 
+	return &svc, nil
+}
+
+// Initialize initializes the Service. If Initialize succeeds, any further call is a no-op.
+func (s *Service) Initialize(prov interface{}) error {
+	if s.initialized {
+		return nil
+	}
+
+	p, ok := prov.(Provider)
+	if !ok {
+		return fmt.Errorf("expected provider of type `%T`, got type `%T`", Provider(nil), p)
+	}
+
+	store, err := p.StorageProvider().OpenStore(Name)
+	if err != nil {
+		return err
+	}
+
 	err = p.StorageProvider().SetStoreConfig(Name, storage.StoreConfiguration{TagNames: []string{transitionalPayloadKey}})
 	if err != nil {
-		return nil, fmt.Errorf("failed to set store configuration: %w", err)
+		return fmt.Errorf("failed to set store configuration: %w", err)
 	}
 
-	svc := &Service{
-		messenger:  p.Messenger(),
-		store:      store,
-		callbacks:  make(chan *metaData),
-		middleware: initialHandler,
-	}
+	s.messenger = p.Messenger()
+	s.store = store
+	s.callbacks = make(chan *metaData)
+	s.middleware = initialHandler
 
 	// start the listener
-	go svc.startInternalListener()
+	go s.startInternalListener()
 
-	return svc, nil
+	s.initialized = true
+
+	return nil
 }
 
 // Use allows providing middlewares.
@@ -230,24 +378,22 @@ func (s *Service) HandleInbound(msg service.DIDCommMsg, ctx service.DIDCommConte
 
 	aEvent := s.ActionEvent()
 
-	canReply := canReplyTo(msgMap)
-
-	if canReply && aEvent == nil {
+	if aEvent == nil {
 		// throw error if there is no action event registered for inbound messages
 		return "", errors.New("no clients are registered to handle the message")
 	}
 
-	md, err := s.doHandle(msgMap)
+	md, err := s.buildMetaData(msgMap, inboundMessage)
 	if err != nil {
-		return "", fmt.Errorf("doHandle: %w", err)
+		return "", fmt.Errorf("buildMetaData: %w", err)
 	}
 
 	md.MyDID = ctx.MyDID()
 	md.TheirDID = ctx.TheirDID()
 
 	// trigger action event based on message type for inbound messages
-	if canReply && canTriggerActionEvents(msgMap) {
-		err = s.saveTransitionalPayload(md.PIID, md.transitionalPayload)
+	if canTriggerActionEvents(msgMap) {
+		err = s.saveTransitionalPayload(md.PIID, &(md.transitionalPayload))
 		if err != nil {
 			return "", fmt.Errorf("save transitional payload: %w", err)
 		}
@@ -266,23 +412,54 @@ func (s *Service) HandleInbound(msg service.DIDCommMsg, ctx service.DIDCommConte
 }
 
 // HandleOutbound handles outbound message (presentproof protocol).
-func (s *Service) HandleOutbound(_ service.DIDCommMsg, _, _ string) (string, error) {
-	return "", errors.New("not implemented")
+func (s *Service) HandleOutbound(msg service.DIDCommMsg, myDID, theirDID string) (string, error) {
+	logger.Debugf("service.HandleOutbound() input: msg=%+v myDID=%s theirDID=%s", msg, myDID, theirDID)
+
+	msgMap := msg.Clone()
+
+	md, err := s.buildMetaData(msgMap, outboundMessage)
+	if err != nil {
+		return "", fmt.Errorf("buildMetaData: %w", err)
+	}
+
+	md.MyDID = myDID
+	md.TheirDID = theirDID
+
+	thid, err := msgMap.ThreadID()
+	if err != nil {
+		return "", fmt.Errorf("failed to obtain the message's threadID : %w", err)
+	}
+
+	// if no action event is triggered, continue the execution
+	return thid, s.handle(md)
 }
 
-func (s *Service) getCurrentInternalDataAndPIID(msg service.DIDCommMsg) (string, *internalData, error) {
+func (s *Service) getCurrentInternalDataAndPIID(msg service.DIDCommMsgMap) (string, *internalData, error) {
+	var protocolVersion version
+
+	isV2, err := service.IsDIDCommV2(&msg)
+	if err != nil {
+		return "", nil, fmt.Errorf("checking message version: %w", err)
+	}
+
+	if isV2 {
+		protocolVersion = version3
+	} else {
+		protocolVersion = version2
+	}
+
 	piID, err := getPIID(msg)
 	if errors.Is(err, service.ErrThreadIDNotFound) {
-		piID = uuid.New().String()
+		msg.SetID(uuid.New().String(), service.WithVersion(getDIDVersion(getVersion(msg.Type()))))
 
-		return piID, &internalData{StateName: stateNameStart}, msg.SetID(piID)
+		return msg.ID(), &internalData{StateName: stateNameStart, ProtocolVersion: protocolVersion}, nil
 	}
 
 	if err != nil {
 		return "", nil, fmt.Errorf("piID: %w", err)
 	}
 
-	data, err := s.currentInternalData(piID)
+	data, err := s.currentInternalData(piID, protocolVersion)
 	if err != nil {
 		return "", nil, fmt.Errorf("current internal data: %w", err)
 	}
@@ -290,15 +467,15 @@ func (s *Service) getCurrentInternalDataAndPIID(msg service.DIDCommMsg) (string,
 	return piID, data, nil
 }
 
-func (s *Service) doHandle(msg service.DIDCommMsgMap) (*metaData, error) {
+func (s *Service) buildMetaData(msg service.DIDCommMsgMap, direction messageDirection) (*metaData, error) {
 	piID, data, err := s.getCurrentInternalDataAndPIID(msg)
 	if err != nil {
 		return nil, fmt.Errorf("current internal data and PIID: %w", err)
 	}
 
-	current := stateFromName(data.StateName)
+	current := stateFromName(data.StateName, getVersion(msg.Type()))
 
-	next, err := nextState(msg)
+	next, err := nextState(msg, direction)
 	if err != nil {
 		return nil, fmt.Errorf("nextState: %w", err)
 	}
@@ -315,8 +492,11 @@ func (s *Service) doHandle(msg service.DIDCommMsgMap) (*metaData, error) {
 				Msg:  msg,
 				PIID: piID,
 			},
+			Direction:       direction,
+			ProtocolVersion: data.ProtocolVersion,
+			Properties:      next.Properties(),
 		},
-		properties: map[string]interface{}{},
+		properties: next.Properties(),
 		state:      next,
 		msgClone:   msg.Clone(),
 	}, nil
@@ -337,7 +517,7 @@ func (s *Service) startInternalListener() {
 
 		logger.Errorf("failed to handle msgID=%s : %s", msg.Msg.ID(), msg.err)
 
-		msg.state = &abandoned{Code: codeInternalError}
+		msg.state = &abandoned{V: getVersion(msg.Msg.Type()), Code: codeInternalError}
 
 		if err := s.handle(msg); err != nil {
 			logger.Errorf("listener handle: %s", err)
@@ -364,7 +544,12 @@ func (s *Service) handle(md *metaData) error {
 		}
 
 		// WARN: md.ackRequired is being modified by requestSent state
-		data := &internalData{StateName: current.Name(), AckRequired: md.AckRequired}
+		data := &internalData{
+			StateName:       current.Name(),
+			AckRequired:     md.AckRequired,
+			ProtocolVersion: md.ProtocolVersion,
+		}
+
 		if err := s.saveInternalData(md.PIID, data); err != nil {
 			return fmt.Errorf("failed to persist state %s: %w", current.Name(), err)
 		}
@@ -388,8 +573,9 @@ func getPIID(msg service.DIDCommMsg) (string, error) {
 }
 
 type internalData struct {
-	AckRequired bool
-	StateName   string
+	AckRequired     bool
+	StateName       string
+	ProtocolVersion version
 }
 
 func (s *Service) saveInternalData(piID string, data *internalData) error {
@@ -401,10 +587,10 @@ func (s *Service) saveInternalData(piID string, data *internalData) error {
 	return s.store.Put(internalDataKey+piID, src)
 }
 
-func (s *Service) currentInternalData(piID string) (*internalData, error) {
+func (s *Service) currentInternalData(piID string, protocolVersion version) (*internalData, error) {
 	src, err := s.store.Get(internalDataKey + piID)
 	if errors.Is(err, storage.ErrDataNotFound) {
-		return &internalData{StateName: stateNameStart}, nil
+		return &internalData{StateName: stateNameStart, ProtocolVersion: protocolVersion}, nil
 	}
 
 	if err != nil {
@@ -420,60 +606,84 @@ func (s *Service) currentInternalData(piID string) (*internalData, error) {
 }
 
 // stateFromName returns the state by given name.
-func stateFromName(name string) state {
+func stateFromName(name, v string) state {
 	switch name {
 	case stateNameStart:
 		return &start{}
-	case stateNameAbandoned:
-		return &abandoned{}
-	case stateNameDone:
-		return &done{}
+	case StateNameAbandoned:
+		return &abandoned{V: v}
+	case StateNameDone:
+		return &done{V: v}
 	case stateNameRequestSent:
-		return &requestSent{}
+		return &requestSent{V: v}
 	case stateNamePresentationReceived:
-		return &presentationReceived{}
+		return &presentationReceived{V: v}
 	case stateNameProposalReceived:
-		return &proposalReceived{}
+		return &proposalReceived{V: v}
 	case stateNameRequestReceived:
-		return &requestReceived{}
+		return &requestReceived{V: v}
 	case stateNamePresentationSent:
-		return &presentationSent{}
+		return &presentationSent{V: v}
 	case stateNameProposalSent:
-		return &proposalSent{}
+		return &proposalSent{V: v}
 	default:
 		return &noOp{}
 	}
 }
 
-func nextState(msg service.DIDCommMsgMap) (state, error) {
-	canReply := canReplyTo(msg)
-
+func nextState(msg service.DIDCommMsgMap, direction messageDirection) (state, error) {
 	switch msg.Type() {
-	case RequestPresentationMsgType:
-		if canReply {
-			return &requestReceived{}, nil
+	case RequestPresentationMsgTypeV2, RequestPresentationMsgTypeV3:
+		switch direction {
+		case inboundMessage:
+			return &requestReceived{V: getVersion(msg.Type())}, nil
+		case outboundMessage:
+			return &requestSent{V: getVersion(msg.Type())}, nil
 		}
-
-		return &requestSent{}, nil
-	case ProposePresentationMsgType:
-		if canReply {
-			return &proposalReceived{}, nil
+	case ProposePresentationMsgTypeV2, ProposePresentationMsgTypeV3:
+		switch direction {
+		case inboundMessage:
+			return &proposalReceived{V: getVersion(msg.Type())}, nil
+		case outboundMessage:
+			return &proposalSent{V: getVersion(msg.Type())}, nil
 		}
-
-		return &proposalSent{}, nil
-	case PresentationMsgType:
-		return &presentationReceived{}, nil
-	case ProblemReportMsgType:
-		return &abandoned{}, nil
-	case AckMsgType:
-		return &done{}, nil
-	default:
-		return nil, fmt.Errorf("unrecognized msgType: %s", msg.Type())
+	case PresentationMsgTypeV2, PresentationMsgTypeV3:
+		return &presentationReceived{V: getVersion(msg.Type())}, nil
+	case ProblemReportMsgTypeV2, ProblemReportMsgTypeV3:
+		return &abandoned{V: getVersion(msg.Type()), properties: redirectInfo(msg)}, nil
+	case AckMsgTypeV2, AckMsgTypeV3:
+		return &done{V: getVersion(msg.Type()), properties: redirectInfo(msg)}, nil
 	}
+
+	return nil, fmt.Errorf("unrecognized msgType: %s", msg.Type())
 }
 
-func (s *Service) saveTransitionalPayload(id string, data transitionalPayload) error {
-	src, err := json.Marshal(data)
+func getVersion(t string) string {
+	if strings.HasPrefix(t, SpecV2) {
+		return SpecV2
+	}
+
+	return SpecV3
+}
+
+func redirectInfo(msg service.DIDCommMsgMap) map[string]interface{} {
+	if redirectInfo, ok := msg[webRedirect].(map[string]interface{}); ok {
+		return redirectInfo
+	}
+
+	return map[string]interface{}{}
+}
+
+func getDIDVersion(v string) service.Version {
+	if v == SpecV3 {
+		return service.V2
+	}
+
+	return service.V1
+}
+
+func (s *Service) saveTransitionalPayload(id string, data *transitionalPayload) error {
+	src, err := json.Marshal(*data)
 	if err != nil {
 		return fmt.Errorf("marshal transitional payload: %w", err)
 	}
@@ -483,10 +693,14 @@ func (s *Service) saveTransitionalPayload(id string, data transitionalPayload) e
 
 // canTriggerActionEvents checks if the incoming message can trigger an action event.
 func canTriggerActionEvents(msg service.DIDCommMsg) bool {
-	return msg.Type() == PresentationMsgType ||
-		msg.Type() == ProposePresentationMsgType ||
-		msg.Type() == RequestPresentationMsgType ||
-		msg.Type() == ProblemReportMsgType
+	return msg.Type() == PresentationMsgTypeV2 ||
+		msg.Type() == ProposePresentationMsgTypeV2 ||
+		msg.Type() == RequestPresentationMsgTypeV2 ||
+		msg.Type() == ProblemReportMsgTypeV2 ||
+		msg.Type() == PresentationMsgTypeV3 ||
+		msg.Type() == ProposePresentationMsgTypeV3 ||
+		msg.Type() == RequestPresentationMsgTypeV3 ||
+		msg.Type() == ProblemReportMsgTypeV3
 }
 
 func (s *Service) getTransitionalPayload(id string) (*transitionalPayload, error) {
@@ -548,7 +762,7 @@ func (s *Service) Actions() ([]Action, error) {
 }
 
 // ActionContinue allows proceeding with the action by the piID.
-func (s *Service) ActionContinue(piID string, opt Opt) error {
+func (s *Service) ActionContinue(piID string, opts ...Opt) error {
 	tPayload, err := s.getTransitionalPayload(piID)
 	if err != nil {
 		return fmt.Errorf("get transitional payload: %w", err)
@@ -556,12 +770,12 @@ func (s *Service) ActionContinue(piID string, opt Opt) error {
 
 	md := &metaData{
 		transitionalPayload: *tPayload,
-		state:               stateFromName(tPayload.StateName),
+		state:               stateFromName(tPayload.StateName, getVersion(tPayload.Msg.Type())),
 		msgClone:            tPayload.Msg.Clone(),
-		properties:          map[string]interface{}{},
+		properties:          tPayload.Properties,
 	}
 
-	if opt != nil {
+	for _, opt := range opts {
 		opt(md)
 	}
 
@@ -575,7 +789,7 @@ func (s *Service) ActionContinue(piID string, opt Opt) error {
 }
 
 // ActionStop allows stopping the action by the piID.
-func (s *Service) ActionStop(piID string, cErr error) error {
+func (s *Service) ActionStop(piID string, cErr error, opts ...Opt) error {
 	tPayload, err := s.getTransitionalPayload(piID)
 	if err != nil {
 		return fmt.Errorf("get transitional payload: %w", err)
@@ -583,9 +797,13 @@ func (s *Service) ActionStop(piID string, cErr error) error {
 
 	md := &metaData{
 		transitionalPayload: *tPayload,
-		state:               stateFromName(tPayload.StateName),
+		state:               stateFromName(tPayload.StateName, tPayload.Msg.Type()),
 		msgClone:            tPayload.Msg.Clone(),
-		properties:          map[string]interface{}{},
+		properties:          tPayload.Properties,
+	}
+
+	for _, opt := range opts {
+		opt(md)
 	}
 
 	if err := s.deleteTransitionalPayload(md.PIID); err != nil {
@@ -679,8 +897,10 @@ func (s *Service) Name() string {
 // Accept msg checks the msg type.
 func (s *Service) Accept(msgType string) bool {
 	switch msgType {
-	case ProposePresentationMsgType, RequestPresentationMsgType,
-		PresentationMsgType, AckMsgType, ProblemReportMsgType:
+	case ProposePresentationMsgTypeV2, RequestPresentationMsgTypeV2,
+		PresentationMsgTypeV2, AckMsgTypeV2, ProblemReportMsgTypeV2,
+		ProposePresentationMsgTypeV3, RequestPresentationMsgTypeV3,
+		PresentationMsgTypeV3, AckMsgTypeV3, ProblemReportMsgTypeV3:
 		return true
 	}
 

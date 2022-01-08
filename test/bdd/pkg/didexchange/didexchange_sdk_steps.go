@@ -19,6 +19,7 @@ import (
 	"github.com/hyperledger/aries-framework-go/pkg/didcomm/common/service"
 	diddoc "github.com/hyperledger/aries-framework-go/pkg/doc/did"
 	vdrapi "github.com/hyperledger/aries-framework-go/pkg/framework/aries/api/vdr"
+	"github.com/hyperledger/aries-framework-go/pkg/kms"
 	"github.com/hyperledger/aries-framework-go/test/bdd/pkg/context"
 )
 
@@ -42,21 +43,26 @@ func NewDIDExchangeSDKSteps() *SDKSteps {
 }
 
 func (d *SDKSteps) createInvitationWithRouter(inviterAgentID, router string) error {
+	return d.createInvitationWithRouterAndKeyType(inviterAgentID, router, "")
+}
+
+func (d *SDKSteps) createInvitationWithoutRouter(inviterAgentID string) error {
+	return d.CreateInvitation(inviterAgentID, "", "")
+}
+
+func (d *SDKSteps) createInvitationWithRouterAndKeyType(inviterAgentID, router, keyType string) error {
 	connection, ok := d.bddContext.Args[router]
 	if !ok {
 		return fmt.Errorf("no connection for %s", router)
 	}
 
-	return d.createInvitation(inviterAgentID, connection)
+	return d.CreateInvitation(inviterAgentID, connection, keyType)
 }
 
-func (d *SDKSteps) createInvitationWithoutRouter(inviterAgentID string) error {
-	return d.createInvitation(inviterAgentID, "")
-}
-
-func (d *SDKSteps) createInvitation(inviterAgentID, connection string) error {
+// CreateInvitation creates an invitation.
+func (d *SDKSteps) CreateInvitation(inviterAgentID, connection, keyType string) error {
 	invitation, err := d.bddContext.DIDExchangeClients[inviterAgentID].CreateInvitation(inviterAgentID,
-		didexchange.WithRouterConnectionID(connection))
+		didexchange.WithRouterConnectionID(connection), didexchange.WithKeyType(kms.KeyType(keyType)))
 	if err != nil {
 		return fmt.Errorf("create invitation: %w", err)
 	}
@@ -458,7 +464,7 @@ func resolveDID(vdr vdrapi.Registry, did string, maxRetry int) (*diddoc.Doc, err
 	var err error
 	for i := 1; i <= maxRetry; i++ {
 		doc, err = vdr.Resolve(did)
-		if err == nil || !strings.Contains(err.Error(), "DID does not exist") {
+		if err == nil || !errors.Is(err, vdrapi.ErrNotFound) {
 			return doc.DIDDocument, err
 		}
 
@@ -477,6 +483,8 @@ func (d *SDKSteps) SetContext(ctx *context.BDDContext) {
 // RegisterSteps registers did exchange steps.
 func (d *SDKSteps) RegisterSteps(s *godog.Suite) {
 	s.Step(`^"([^"]*)" creates invitation$`, d.createInvitationWithoutRouter)
+	s.Step(`^"([^"]*)" creates invitation with router "([^"]*)" using key type "([^"]*)"$`,
+		d.createInvitationWithRouterAndKeyType)
 	s.Step(`^"([^"]*)" creates invitation with router "([^"]*)"$`, d.createInvitationWithRouter)
 	s.Step(`^"([^"]*)" validates that invitation service endpoint of type "([^"]*)"$`, d.validateInvitationEndpointScheme)
 	s.Step(`^"([^"]*)" creates invitation with public DID$`, d.CreateInvitationWithDID)

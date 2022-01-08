@@ -12,6 +12,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -103,6 +104,62 @@ func Parse(did string) (*DID, error) {
 	}, nil
 }
 
+// DIDURL holds a DID URL.
+type DIDURL struct { // nolint:golint // ignore name stutter
+	DID
+	Path     string
+	Queries  map[string][]string
+	Fragment string
+}
+
+// ParseDIDURL parses a DID URL string into a DIDURL object.
+func ParseDIDURL(didURL string) (*DIDURL, error) {
+	split := strings.IndexAny(didURL, "?/#")
+
+	didPart := didURL
+	pathQueryFragment := ""
+
+	if split != -1 {
+		didPart = didURL[:split]
+		pathQueryFragment = didURL[split:]
+	}
+
+	retDID, err := Parse(didPart)
+	if err != nil {
+		return nil, err
+	}
+
+	if pathQueryFragment == "" {
+		return &DIDURL{
+			DID:     *retDID,
+			Queries: map[string][]string{},
+		}, nil
+	}
+
+	hasPath := pathQueryFragment[0] == '/'
+
+	if !hasPath {
+		pathQueryFragment = "/" + pathQueryFragment
+	}
+
+	urlParts, err := url.Parse(pathQueryFragment)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse path, query, and fragment components of DID URL: %w", err)
+	}
+
+	ret := &DIDURL{
+		DID:      *retDID,
+		Queries:  urlParts.Query(),
+		Fragment: urlParts.Fragment,
+	}
+
+	if hasPath {
+		ret.Path = urlParts.Path
+	}
+
+	return ret, nil
+}
+
 // DocResolution did resolution.
 type DocResolution struct {
 	Context          []string
@@ -118,6 +175,32 @@ type MethodMetadata struct {
 	RecoveryCommitment string `json:"recoveryCommitment,omitempty"`
 	// Published is published key.
 	Published bool `json:"published,omitempty"`
+	// AnchorOrigin is anchor origin.
+	AnchorOrigin string `json:"anchorOrigin,omitempty"`
+	// UnpublishedOperations unpublished operations
+	UnpublishedOperations []*Operations `json:"unpublishedOperations,omitempty"`
+	// PublishedOperations published operations
+	PublishedOperations []*Operations `json:"publishedOperations,omitempty"`
+}
+
+// Operations info.
+type Operations struct {
+	// OperationRequest is operation request.
+	OperationRequest string `json:"operationRequest,omitempty"`
+	// ProtocolVersion is protocol version.
+	ProtocolVersion int `json:"protocolVersion,omitempty"`
+	// TransactionNumber is transaction number.
+	TransactionNumber int `json:"transactionNumber,omitempty"`
+	// TransactionTime is transaction time.
+	TransactionTime int64 `json:"transactionTime,omitempty"`
+	// Type is type of operation.
+	Type string `json:"type,omitempty"`
+	// AnchorOrigin is anchor origin.
+	AnchorOrigin string `json:"anchorOrigin,omitempty"`
+	// CanonicalReference is canonical reference
+	CanonicalReference string `json:"canonicalReference,omitempty"`
+	// EquivalentReferences is equivalent references
+	EquivalentReferences []string `json:"equivalentReferences,omitempty"`
 }
 
 // DocumentMetadata document metadata.
@@ -1173,9 +1256,15 @@ func populateRawServices(services []Service, didID, baseURI string) []map[string
 
 		rawService[jsonldType] = services[i].Type
 		rawService[jsonldServicePoint] = services[i].ServiceEndpoint
-		rawService[jsonldRecipientKeys] = recipientKeys
-		rawService[jsonldRoutingKeys] = routingKeys
 		rawService[jsonldPriority] = services[i].Priority
+
+		if len(recipientKeys) > 0 {
+			rawService[jsonldRecipientKeys] = recipientKeys
+		}
+
+		if len(routingKeys) > 0 {
+			rawService[jsonldRoutingKeys] = routingKeys
+		}
 
 		rawServices = append(rawServices, rawService)
 	}

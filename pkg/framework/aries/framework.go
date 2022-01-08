@@ -14,8 +14,11 @@ import (
 	jsonld "github.com/piprate/json-gold/ld"
 
 	"github.com/hyperledger/aries-framework-go/pkg/crypto"
+	"github.com/hyperledger/aries-framework-go/pkg/didcomm/common/middleware"
 	"github.com/hyperledger/aries-framework-go/pkg/didcomm/common/service"
 	"github.com/hyperledger/aries-framework-go/pkg/didcomm/dispatcher"
+	"github.com/hyperledger/aries-framework-go/pkg/didcomm/dispatcher/inbound"
+	"github.com/hyperledger/aries-framework-go/pkg/didcomm/dispatcher/outbound"
 	"github.com/hyperledger/aries-framework-go/pkg/didcomm/messenger"
 	"github.com/hyperledger/aries-framework-go/pkg/didcomm/packager"
 	"github.com/hyperledger/aries-framework-go/pkg/didcomm/packer"
@@ -48,6 +51,7 @@ type Aries struct {
 	protocolStateStoreProvider storage.Provider
 	protocolSvcCreators        []api.ProtocolSvcCreator
 	services                   []dispatcher.ProtocolService
+	servicesMsgTypeTargets     []dispatcher.MessageTypeTarget
 	msgSvcProvider             api.MessageServiceProvider
 	outboundDispatcher         dispatcher.Outbound
 	messenger                  service.MessengerHandler
@@ -76,6 +80,8 @@ type Aries struct {
 	keyType                    kms.KeyType
 	keyAgreementType           kms.KeyType
 	mediaTypeProfiles          []string
+	inboundEnvelopeHandler     inbound.MessageHandler
+	didRotator                 middleware.DIDCommMessageMiddleware
 }
 
 // Option configures the framework.
@@ -107,7 +113,7 @@ func New(opts ...Option) (*Aries, error) {
 	// TODO: https://github.com/hyperledger/aries-framework-go/issues/212
 	//  Define clear relationship between framework and context.
 	//  Details - The code creates context without protocolServices. The protocolServicesCreators are dependent
-	//  on the context. The inbound transports require ctx.InboundMessageHandler(), which in-turn depends on
+	//  on the context. The inbound transports require ctx.MessageHandler(), which in-turn depends on
 	//  protocolServices. At the moment, there is a looping issue among these.
 
 	return initializeServices(frameworkOpts)
@@ -127,6 +133,11 @@ func initializeServices(frameworkOpts *Aries) (*Aries, error) {
 
 	// create packers and packager (must be done after KMS and connection store)
 	if err := createPackersAndPackager(frameworkOpts); err != nil {
+		return nil, err
+	}
+
+	// Create DID rotator
+	if err := createDIDRotator(frameworkOpts); err != nil {
 		return nil, err
 	}
 
@@ -351,6 +362,14 @@ func WithMediaTypeProfiles(mediaTypeProfiles []string) Option {
 	}
 }
 
+// WithServiceMsgTypeTargets injects service msg type to target mappings in the context.
+func WithServiceMsgTypeTargets(msgTypeTargets ...dispatcher.MessageTypeTarget) Option {
+	return func(opts *Aries) error {
+		opts.servicesMsgTypeTargets = msgTypeTargets
+		return nil
+	}
+}
+
 // Context provides a handle to the framework context.
 func (a *Aries) Context() (*context.Provider, error) {
 	return context.New(
@@ -379,6 +398,9 @@ func (a *Aries) Context() (*context.Provider, error) {
 		context.WithKeyType(a.keyType),
 		context.WithKeyAgreementType(a.keyAgreementType),
 		context.WithMediaTypeProfiles(a.mediaTypeProfiles),
+		context.WithServiceMsgTypeTargets(a.servicesMsgTypeTargets...),
+		context.WithDIDRotator(&a.didRotator),
+		context.WithInboundEnvelopeHandler(&a.inboundEnvelopeHandler),
 	)
 }
 
@@ -461,9 +483,18 @@ func createVDR(frameworkOpts *Aries) error {
 		return fmt.Errorf("create new vdr peer failed: %w", err)
 	}
 
+	dst := vdrapi.DIDCommServiceType
+
+	for _, mediaType := range frameworkOpts.mediaTypeProfiles {
+		if mediaType == transport.MediaTypeDIDCommV2Profile || mediaType == transport.MediaTypeAIP2RFC0587Profile {
+			dst = vdrapi.DIDCommV2ServiceType
+			break
+		}
+	}
+
 	opts = append(opts,
 		vdr.WithVDR(p),
-		vdr.WithDefaultServiceType(vdrapi.DIDCommServiceType),
+		vdr.WithDefaultServiceType(dst),
 		vdr.WithDefaultServiceEndpoint(ctx.ServiceEndpoint()),
 	)
 
@@ -493,6 +524,28 @@ func createMessengerHandler(frameworkOpts *Aries) error {
 	return err
 }
 
+func createDIDRotator(frameworkOpts *Aries) error {
+	ctx, err := context.New(
+		context.WithKMS(frameworkOpts.kms),
+		context.WithCrypto(frameworkOpts.crypto),
+		context.WithVDRegistry(frameworkOpts.vdrRegistry),
+		context.WithStorageProvider(frameworkOpts.storeProvider),
+		context.WithProtocolStateStorageProvider(frameworkOpts.protocolStateStoreProvider),
+	)
+	if err != nil {
+		return fmt.Errorf("context creation failed: %w", err)
+	}
+
+	dr, err := middleware.New(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to init did rotator: %w", err)
+	}
+
+	frameworkOpts.didRotator = *dr
+
+	return nil
+}
+
 func createOutboundDispatcher(frameworkOpts *Aries) error {
 	ctx, err := context.New(
 		context.WithKMS(frameworkOpts.kms),
@@ -505,12 +558,13 @@ func createOutboundDispatcher(frameworkOpts *Aries) error {
 		context.WithProtocolStateStorageProvider(frameworkOpts.protocolStateStoreProvider),
 		context.WithMediaTypeProfiles(frameworkOpts.mediaTypeProfiles),
 		context.WithKeyAgreementType(frameworkOpts.keyAgreementType),
+		context.WithDIDRotator(&frameworkOpts.didRotator),
 	)
 	if err != nil {
 		return fmt.Errorf("context creation failed: %w", err)
 	}
 
-	frameworkOpts.outboundDispatcher, err = dispatcher.NewOutbound(ctx)
+	frameworkOpts.outboundDispatcher, err = outbound.NewOutbound(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to init outbound dispatcher: %w", err)
 	}
@@ -609,6 +663,7 @@ func startTransports(frameworkOpts *Aries) error {
 		context.WithKeyType(frameworkOpts.keyType),
 		context.WithKeyAgreementType(frameworkOpts.keyAgreementType),
 		context.WithMediaTypeProfiles(frameworkOpts.mediaTypeProfiles),
+		context.WithInboundEnvelopeHandler(&frameworkOpts.inboundEnvelopeHandler),
 	)
 	if err != nil {
 		return fmt.Errorf("context creation failed: %w", err)
@@ -631,7 +686,10 @@ func startTransports(frameworkOpts *Aries) error {
 	return nil
 }
 
-func loadServices(frameworkOpts *Aries) error {
+func loadServices(frameworkOpts *Aries) error { // nolint:funlen
+	// uninitialized
+	frameworkOpts.inboundEnvelopeHandler = inbound.MessageHandler{}
+
 	ctx, err := context.New(
 		context.WithOutboundDispatcher(frameworkOpts.outboundDispatcher),
 		context.WithMessengerHandler(frameworkOpts.messenger),
@@ -650,13 +708,16 @@ func loadServices(frameworkOpts *Aries) error {
 		context.WithKeyType(frameworkOpts.keyType),
 		context.WithKeyAgreementType(frameworkOpts.keyAgreementType),
 		context.WithMediaTypeProfiles(frameworkOpts.mediaTypeProfiles),
+		context.WithInboundEnvelopeHandler(&frameworkOpts.inboundEnvelopeHandler),
+		context.WithServiceMsgTypeTargets(frameworkOpts.servicesMsgTypeTargets...),
+		context.WithDIDRotator(&frameworkOpts.didRotator),
 	)
 	if err != nil {
 		return fmt.Errorf("create context failed: %w", err)
 	}
 
-	for _, v := range frameworkOpts.protocolSvcCreators {
-		svc, svcErr := v(ctx)
+	for i, v := range frameworkOpts.protocolSvcCreators {
+		svc, svcErr := v.Create(ctx)
 		if svcErr != nil {
 			return fmt.Errorf("new protocol service failed: %w", svcErr)
 		}
@@ -664,8 +725,25 @@ func loadServices(frameworkOpts *Aries) error {
 		frameworkOpts.services = append(frameworkOpts.services, svc)
 		// after service was successfully created we need to add it to the context
 		// since the introduce protocol depends on did-exchange
-		if err := context.WithProtocolServices(frameworkOpts.services...)(ctx); err != nil {
-			return err
+		if e := context.WithProtocolServices(frameworkOpts.services...)(ctx); e != nil {
+			return e
+		}
+
+		frameworkOpts.protocolSvcCreators[i].ServicePointer = svc
+	}
+
+	// after adding all protocol services to the context, we can initialize the handler properly.
+	frameworkOpts.inboundEnvelopeHandler.Initialize(ctx)
+
+	for _, v := range frameworkOpts.protocolSvcCreators {
+		if init := v.Init; init != nil {
+			if e := init(v.ServicePointer, ctx); e != nil {
+				return e
+			}
+		} else {
+			if e := v.ServicePointer.Initialize(ctx); e != nil {
+				return e
+			}
 		}
 	}
 

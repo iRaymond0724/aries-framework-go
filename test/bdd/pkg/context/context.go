@@ -17,6 +17,7 @@ import (
 	"github.com/hyperledger/aries-framework-go/pkg/client/didexchange"
 	"github.com/hyperledger/aries-framework-go/pkg/client/mediator"
 	"github.com/hyperledger/aries-framework-go/pkg/client/outofband"
+	"github.com/hyperledger/aries-framework-go/pkg/client/outofbandv2"
 	"github.com/hyperledger/aries-framework-go/pkg/common/log"
 	"github.com/hyperledger/aries-framework-go/pkg/didcomm/common/service"
 	"github.com/hyperledger/aries-framework-go/pkg/didcomm/messaging/msghandler"
@@ -31,18 +32,22 @@ var logger = log.New("aries-framework/tests/context")
 // BDDContext is a global context shared between different test suites in bddtests.
 type BDDContext struct {
 	OutOfBandClients   map[string]*outofband.Client
+	OutOfBandV2Clients map[string]*outofbandv2.Client
 	DIDExchangeClients map[string]*didexchange.Client
 	RouteClients       map[string]*mediator.Client
 	RouteCallbacks     map[string]chan interface{}
 	PublicDIDDocs      map[string]*did.Doc
 	PublicKeys         map[string]*jwk.JWK
+	PublicEncKeys      map[string][]byte
 	KeyHandles         map[string]interface{}
 	PublicDIDs         map[string]string
+	PeerDIDs           map[string]string
 	Agents             map[string]*aries.Aries
 	AgentCtx           map[string]*bddcontext.Provider
 	MessageRegistrar   map[string]*msghandler.Registrar
 	Messengers         map[string]service.Messenger
 	Args               map[string]string
+	ConnectionIDs      map[string]map[string]string
 	controllerURLs     map[string]string
 	webhookURLs        map[string]string
 	webSocketConns     map[string]*websocket.Conn
@@ -54,6 +59,7 @@ type BDDContext struct {
 func NewBDDContext() *BDDContext {
 	return &BDDContext{
 		OutOfBandClients:   make(map[string]*outofband.Client),
+		OutOfBandV2Clients: make(map[string]*outofbandv2.Client),
 		DIDExchangeClients: make(map[string]*didexchange.Client),
 		RouteClients:       make(map[string]*mediator.Client),
 		RouteCallbacks:     make(map[string]chan interface{}),
@@ -61,11 +67,13 @@ func NewBDDContext() *BDDContext {
 		PublicKeys:         make(map[string]*jwk.JWK),
 		KeyHandles:         make(map[string]interface{}),
 		PublicDIDs:         make(map[string]string),
+		PeerDIDs:           make(map[string]string),
 		Agents:             make(map[string]*aries.Aries),
 		AgentCtx:           make(map[string]*bddcontext.Provider),
 		MessageRegistrar:   make(map[string]*msghandler.Registrar),
 		Messengers:         make(map[string]service.Messenger),
 		Args:               make(map[string]string),
+		ConnectionIDs:      make(map[string]map[string]string),
 		controllerURLs:     make(map[string]string),
 		webhookURLs:        make(map[string]string),
 		webSocketConns:     make(map[string]*websocket.Conn),
@@ -155,13 +163,59 @@ func (b *BDDContext) RegisterWebSocketConn(agentID string, conn *websocket.Conn)
 				continue
 			}
 
-			if strings.Contains(err.Error(), "WebSocket closed") {
+			if strings.Contains(err.Error(), "bddtests destroy context") {
 				return
 			}
 
 			logger.Errorf("failed to get topics for agent '%s' : %v", agentID, err)
 		}
 	}()
+}
+
+// GetConnectionID gets the connection ID for agent's connection to target, or the empty string if there is none.
+func (b *BDDContext) GetConnectionID(agent, target string) string {
+	idMap, ok := b.ConnectionIDs[agent]
+	if !ok {
+		return ""
+	}
+
+	return idMap[target]
+}
+
+// SaveConnectionID sets the connection ID for agent's connection to target.
+func (b *BDDContext) SaveConnectionID(agent, target, connID string) {
+	if _, ok := b.ConnectionIDs[agent]; !ok {
+		b.ConnectionIDs[agent] = make(map[string]string)
+	}
+
+	b.ConnectionIDs[agent][target] = connID
+}
+
+// OwnerOfDID helper function for finding an agent name that has a given DID within the bdd context.
+func (b *BDDContext) OwnerOfDID(didStr string) string {
+	for agent, pubDID := range b.PublicDIDs {
+		if pubDID == didStr {
+			return agent
+		}
+	}
+
+	for agent, peerDID := range b.PeerDIDs {
+		if peerDID == didStr {
+			return agent
+		}
+	}
+
+	for agent, pubDoc := range b.PublicDIDDocs {
+		if pubDoc == nil {
+			continue
+		}
+
+		if pubDoc.ID == didStr {
+			return agent
+		}
+	}
+
+	return ""
 }
 
 // ReadFromWebSocket reads from WebSocket.

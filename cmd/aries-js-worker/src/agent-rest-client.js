@@ -271,16 +271,33 @@ const pkgs = {
             path: "/issuecredential/send-offer",
             method: "POST",
         },
+        SendOfferV3: {
+            path: "/issuecredential/v3/send-offer",
+            method: "POST",
+        },
         SendProposal: {
             path: "/issuecredential/send-proposal",
+            method: "POST",
+        },
+        SendProposalV3: {
+            path: "/issuecredential/v3/send-proposal",
             method: "POST",
         },
         SendRequest: {
             path: "/issuecredential/send-request",
             method: "POST",
         },
+        SendRequestV3: {
+            path: "/issuecredential/v3/send-request",
+            method: "POST",
+        },
         AcceptProposal: {
             path: "/issuecredential/{piid}/accept-proposal",
+            method: "POST",
+            pathParam: "piid"
+        },
+        AcceptProposalV3: {
+            path: "/issuecredential/v3/{piid}/accept-proposal",
             method: "POST",
             pathParam: "piid"
         },
@@ -309,8 +326,18 @@ const pkgs = {
             method: "POST",
             pathParam: "piid"
         },
+        NegotiateProposalV3: {
+            path: "/issuecredential/v3/{piid}/negotiate-proposal",
+            method: "POST",
+            pathParam: "piid"
+        },
         AcceptRequest: {
             path: "/issuecredential/{piid}/accept-request",
+            method: "POST",
+            pathParam: "piid"
+        },
+        AcceptRequestV3: {
+            path: "/issuecredential/v3/{piid}/accept-request",
             method: "POST",
             pathParam: "piid"
         },
@@ -339,8 +366,16 @@ const pkgs = {
             path: "/presentproof/send-request-presentation",
             method: "POST",
         },
+        SendRequestPresentationV3: {
+            path: "/presentproof/v3/send-request-presentation",
+            method: "POST",
+        },
         SendProposePresentation: {
             path: "/presentproof/send-propose-presentation",
+            method: "POST",
+        },
+        SendProposePresentationV3: {
+            path: "/presentproof/v3/send-propose-presentation",
             method: "POST",
         },
         AcceptProblemReport: {
@@ -353,8 +388,18 @@ const pkgs = {
             method: "POST",
             pathParam: "piid"
         },
+        AcceptRequestPresentationV3: {
+            path: "/presentproof/v3/{piid}/accept-request-presentation",
+            method: "POST",
+            pathParam: "piid"
+        },
         AcceptProposePresentation: {
             path: "/presentproof/{piid}/accept-propose-presentation",
+            method: "POST",
+            pathParam: "piid"
+        },
+        AcceptProposePresentationV3: {
+            path: "/presentproof/v3/{piid}/accept-propose-presentation",
             method: "POST",
             pathParam: "piid"
         },
@@ -365,6 +410,11 @@ const pkgs = {
         },
         NegotiateRequestPresentation: {
             path: "/presentproof/{piid}/negotiate-request-presentation",
+            method: "POST",
+            pathParam: "piid"
+        },
+        NegotiateRequestPresentationV3: {
+            path: "/presentproof/v3/{piid}/negotiate-request-presentation",
             method: "POST",
             pathParam: "piid"
         },
@@ -383,6 +433,17 @@ const pkgs = {
             method: "POST",
             pathParam: "piid"
         },
+    },
+    connection: {
+        CreateConnectionV2: {
+            path: "/connections/create-v2",
+            method: "POST"
+        },
+        SetConnectionToDIDCommV2: {
+            path: "/connections/{id}/use-v2",
+            method: "POST",
+            pathParam: "id"
+        }
     },
     kms: {
         CreateKeySet: {
@@ -466,6 +527,14 @@ const pkgs = {
         },
         PresentProof: {
             path: "/vcwallet/present-proof",
+            method: "POST",
+        },
+        ProposeCredential: {
+            path: "/vcwallet/propose-credential",
+            method: "POST",
+        },
+        RequestCredential: {
+            path: "/vcwallet/request-credential",
             method: "POST",
         },
     },

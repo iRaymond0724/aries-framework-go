@@ -13,7 +13,7 @@ const inBrowser = typeof window !== 'undefined' && typeof window.document !== 'u
 const notifierWait = 10000
 
 // time out for command operations
-const commandTimeout = 20000
+const commandTimeout = 25000
 
 // base path to load assets from at runtime
 const __publicPath = _ => {
@@ -102,6 +102,7 @@ function newMsg(pkg, fn, payload) {
  *      "agent-rest-url": "http://controller.api.example.com",
  *      "agent-rest-wshook": "ws://controller.api.example.com",
  *      "context-provider-url": ["https://context-provider.example.com/ld_contexts.json"]
+ *      "media-type-profiles": ["didcomm/v2"]
  * }
  *
  * @param opts framework initialization options.
@@ -402,6 +403,15 @@ const Aries = function (opts) {
                 return invoke(aw, pending, this.pkgname, "SendOffer", req, "timeout while sending an offer")
             },
             /**
+             * Sends an offer V3.
+             *
+             * @param req - json document
+             * @returns {Promise<Object>}
+             */
+            sendOfferV3: async function (req) {
+                return invoke(aw, pending, this.pkgname, "SendOfferV3", req, "timeout while sending an offer")
+            },
+            /**
              * Sends a proposal.
              *
              * @param req - json document
@@ -409,6 +419,15 @@ const Aries = function (opts) {
              */
             sendProposal: function (req) {
                 return invoke(aw, pending, this.pkgname, "SendProposal", req, "timeout while sending a proposal")
+            },
+            /**
+             * Sends a proposal v3.
+             *
+             * @param req - json document
+             * @returns {Promise<Object>}
+             */
+            sendProposalV3: function (req) {
+                return invoke(aw, pending, this.pkgname, "SendProposalV3", req, "timeout while sending a proposal")
             },
             /**
              * Sends a request.
@@ -420,6 +439,15 @@ const Aries = function (opts) {
                 return invoke(aw, pending, this.pkgname, "SendRequest", req, "timeout while sending a request")
             },
             /**
+             * Sends a request v3.
+             *
+             * @param req - json document
+             * @returns {Promise<Object>}
+             */
+            sendRequestV3: async function (req) {
+                return invoke(aw, pending, this.pkgname, "SendRequestV3", req, "timeout while sending a request")
+            },
+            /**
              * Accepts a proposal.
              *
              * @param req - json document
@@ -427,6 +455,15 @@ const Aries = function (opts) {
              */
             acceptProposal: function (req) {
                 return invoke(aw, pending, this.pkgname, "AcceptProposal", req, "timeout while accepting a proposal")
+            },
+            /**
+             * Accepts a proposal v3.
+             *
+             * @param req - json document
+             * @returns {Promise<Object>}
+             */
+            acceptProposalV3: function (req) {
+                return invoke(aw, pending, this.pkgname, "AcceptProposalV3", req, "timeout while accepting a proposal")
             },
             /**
              * Declines a proposal.
@@ -474,6 +511,15 @@ const Aries = function (opts) {
                 return invoke(aw, pending, this.pkgname, "NegotiateProposal", req, "timeout while negotiating proposal")
             },
             /**
+             * Is used when the Holder wants to negotiate about an offer he received.
+             *
+             * @param req - json document
+             * @returns {Promise<Object>}
+             */
+            negotiateProposalV3: function (req) {
+                return invoke(aw, pending, this.pkgname, "NegotiateProposalV3", req, "timeout while negotiating proposal")
+            },
+            /**
              * Accepts a request.
              *
              * @param req - json document
@@ -481,6 +527,15 @@ const Aries = function (opts) {
              */
             acceptRequest: function (req) {
                 return invoke(aw, pending, this.pkgname, "AcceptRequest", req, "timeout while accepting a request")
+            },
+            /**
+             * Accepts a request v3.
+             *
+             * @param req - json document
+             * @returns {Promise<Object>}
+             */
+            acceptRequestV3: function (req) {
+                return invoke(aw, pending, this.pkgname, "AcceptRequestV3", req, "timeout while accepting a request")
             },
             /**
              * Declines a request.
@@ -535,6 +590,15 @@ const Aries = function (opts) {
                 return invoke(aw, pending, this.pkgname, "SendRequestPresentation", req, "timeout while sending a request presentation")
             },
             /**
+             * Sends a request presentation v3.
+             *
+             * @param req - json document
+             * @returns {Promise<Object>}
+             */
+            sendRequestPresentationV3: async function (req) {
+                return invoke(aw, pending, this.pkgname, "SendRequestPresentationV3", req, "timeout while sending a request presentation")
+            },
+            /**
              * Sends a propose presentation.
              * https://w3c-ccg.github.io/universal-wallet-interop-spec/#proposepresentation
              *
@@ -543,6 +607,16 @@ const Aries = function (opts) {
              */
             sendProposePresentation: function (req) {
                 return invoke(aw, pending, this.pkgname, "SendProposePresentation", req, "timeout while sending a propose presentation")
+            },
+            /**
+             * Sends a propose presentation v3.
+             * https://w3c-ccg.github.io/universal-wallet-interop-spec/#proposepresentation
+             *
+             * @param req - json document
+             * @returns {Promise<Object>}
+             */
+            sendProposePresentationV3: function (req) {
+                return invoke(aw, pending, this.pkgname, "SendProposePresentationV3", req, "timeout while sending a propose presentation")
             },
             /**
              * Accepts a problem report.
@@ -564,6 +638,15 @@ const Aries = function (opts) {
                 return invoke(aw, pending, this.pkgname, "AcceptRequestPresentation", req, "timeout while accepting a request presentation")
             },
             /**
+             * Accepts a request presentation v3.
+             *
+             * @param req - json document
+             * @returns {Promise<Object>}
+             */
+            acceptRequestPresentationV3: function (req) {
+                return invoke(aw, pending, this.pkgname, "AcceptRequestPresentationV3", req, "timeout while accepting a request presentation")
+            },
+            /**
              * Accepts a propose presentation.
              *
              * @param req - json document
@@ -571,6 +654,15 @@ const Aries = function (opts) {
              */
             acceptProposePresentation: function (req) {
                 return invoke(aw, pending, this.pkgname, "AcceptProposePresentation", req, "timeout while accepting a propose presentation")
+            },
+            /**
+             * Accepts a propose presentation v3.
+             *
+             * @param req - json document
+             * @returns {Promise<Object>}
+             */
+            acceptProposePresentationV3: function (req) {
+                return invoke(aw, pending, this.pkgname, "AcceptProposePresentationV3", req, "timeout while accepting a propose presentation")
             },
             /**
              * Accepts a presentation.
@@ -589,6 +681,15 @@ const Aries = function (opts) {
              */
             negotiateRequestPresentation: function (req) {
                 return invoke(aw, pending, this.pkgname, "NegotiateRequestPresentation", req, "timeout while negotiating a request presentation")
+            },
+            /**
+             * Is used by the Prover to counter a presentation request v3 they received with a proposal v3.
+             *
+             * @param req - json document
+             * @returns {Promise<Object>}
+             */
+            negotiateRequestPresentationV3: function (req) {
+                return invoke(aw, pending, this.pkgname, "NegotiateRequestPresentationV3", req, "timeout while negotiating a request presentation")
             },
             /**
              * Declines a request presentation.
@@ -719,6 +820,21 @@ const Aries = function (opts) {
              */
             queryConnections: async function (req) {
                 return invoke(aw, pending, this.pkgname, "QueryConnections", req, "timeout while querying connections")
+            }
+        },
+
+        /*
+        * Connection methods.
+        */
+        connection: {
+            pkgname: "connection",
+
+            createConnectionV2: async function (req) {
+                return invoke(aw, pending, this.pkgname, "CreateConnectionV2", req, "timeout while creating didcomm v2 connection")
+            },
+
+            SetConnectionToDIDCommV2: async function (req) {
+                return invoke(aw, pending, this.pkgname, "SetConnectionToDIDCommV2", req, "timeout while setting connection to didcomm v2")
             }
         },
 
@@ -1304,6 +1420,30 @@ const Aries = function (opts) {
              */
             presentProof: async function (req) {
                 return invoke(aw, pending, this.pkgname, "PresentProof", req, "timeout while performing present proof from wallet")
+            },
+
+            /**
+             *
+             * accepts out-of-band invitation, sends propose credential message from wallet to issuer and optionally waits for offer credential response.
+             *
+             *  Returns offer credential message response.
+             *
+             * @returns {Promise<Object>}
+             */
+            proposeCredential: async function (req) {
+                return invoke(aw, pending, this.pkgname, "ProposeCredential", req, "timeout while proposing credential from wallet")
+            },
+
+            /**
+             *
+             * sends request credential message from wallet to issuer and optionally waits for credential fulfillment.
+             *
+             *  Returns credential fulfillment and web redirect info.
+             *
+             * @returns {Promise<Object>}
+             */
+            requestCredential: async function (req) {
+                return invoke(aw, pending, this.pkgname, "RequestCredential", req, "timeout while performing request credential from wallet")
             },
         },
         /**

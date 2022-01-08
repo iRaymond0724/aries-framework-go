@@ -99,8 +99,8 @@ func (h *handler) Handle(md issuecredential.Metadata) error {
 	)
 
 	switch md.Message().Type() {
-	case issuecredential.RequestCredentialMsgType:
-		p := &issuecredential.RequestCredential{}
+	case issuecredential.RequestCredentialMsgTypeV2:
+		p := &issuecredential.RequestCredentialV2{}
 		err = md.Message().Decode(p)
 		formats = p.Formats
 		attachments = p.RequestsAttach

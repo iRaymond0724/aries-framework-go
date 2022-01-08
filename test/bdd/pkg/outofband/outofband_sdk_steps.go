@@ -7,6 +7,7 @@ SPDX-License-Identifier: Apache-2.0
 package outofband
 
 import (
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"strings"
@@ -17,9 +18,13 @@ import (
 
 	didexClient "github.com/hyperledger/aries-framework-go/pkg/client/didexchange"
 	"github.com/hyperledger/aries-framework-go/pkg/client/outofband"
+	"github.com/hyperledger/aries-framework-go/pkg/client/outofbandv2"
 	"github.com/hyperledger/aries-framework-go/pkg/didcomm/common/service"
 	"github.com/hyperledger/aries-framework-go/pkg/didcomm/protocol/decorator"
 	"github.com/hyperledger/aries-framework-go/pkg/didcomm/protocol/issuecredential"
+	oobv2 "github.com/hyperledger/aries-framework-go/pkg/didcomm/protocol/outofbandv2"
+	"github.com/hyperledger/aries-framework-go/pkg/didcomm/protocol/presentproof"
+	"github.com/hyperledger/aries-framework-go/pkg/didcomm/transport"
 	"github.com/hyperledger/aries-framework-go/test/bdd/pkg/context"
 	bddDIDExchange "github.com/hyperledger/aries-framework-go/test/bdd/pkg/didexchange"
 	"github.com/hyperledger/aries-framework-go/test/bdd/pkg/didresolver"
@@ -30,17 +35,20 @@ import (
 type SDKSteps struct {
 	context            *context.BDDContext
 	pendingInvitations map[string]*outofband.Invitation
+	pendingV2Invites   map[string]*oobv2.Invitation
 	connectionIDs      map[string]string
 	bddDIDExchSDK      *bddDIDExchange.SDKSteps
 	bddIssueCredSDK    *bddIssueCred.SDKSteps
 	nextAction         map[string]chan interface{}
 	credName           string
+	accept             string
 }
 
 // NewOutOfBandSDKSteps returns the out-of-band protocol's BDD steps using the SDK binding.
 func NewOutOfBandSDKSteps() *SDKSteps {
 	return &SDKSteps{
 		pendingInvitations: make(map[string]*outofband.Invitation),
+		pendingV2Invites:   make(map[string]*oobv2.Invitation),
 		connectionIDs:      make(map[string]string),
 		bddDIDExchSDK:      bddDIDExchange.NewDIDExchangeSDKSteps(),
 		bddIssueCredSDK:    bddIssueCred.NewIssueCredentialSDKSteps(),
@@ -57,9 +65,16 @@ func (sdk *SDKSteps) SetContext(ctx *context.BDDContext) {
 	sdk.bddIssueCredSDK.SetContext(ctx)
 }
 
+func (sdk *SDKSteps) scenario(accept string) error {
+	sdk.accept = accept
+
+	return nil
+}
+
 // RegisterSteps registers the BDD steps on the suite.
 func (sdk *SDKSteps) RegisterSteps(suite *godog.Suite) {
 	suite.Step(`^"([^"]*)" creates an out-of-band invitation$`, sdk.createOOBInvitation)
+	suite.Step(`^options ""([^"]*)""$`, sdk.scenario)
 	suite.Step(
 		`^"([^"]*)" sends the invitation to "([^"]*)" through an out-of-band channel$`, sdk.sendInvitationThruOOBChannel)
 	suite.Step(`^"([^"]*)" accepts the invitation and connects with "([^"]*)"$`, sdk.acceptInvitationAndConnect)
@@ -67,14 +82,20 @@ func (sdk *SDKSteps) RegisterSteps(suite *godog.Suite) {
 	suite.Step(`^"([^"]*)" creates an out-of-band invitation with a public DID$`, sdk.createOOBInvitationWithPubDID)
 	suite.Step(`^"([^"]*)" connects with "([^"]*)" using the invitation$`, sdk.connectAndConfirmConnection)
 	suite.Step(`^"([^"]*)" creates another out-of-band invitation with the same public DID$`, sdk.CreateInvitationWithDID)
-	suite.Step(`^"([^"]*)" accepts the invitation from "([^"]*)" and both agents opt to reuse their connections$`, sdk.acceptInvitationAndConnectWithReuse) // nolint:lll
+	suite.Step(`^"([^"]*)" accepts the invitation from "([^"]*)" and both agents opt to reuse their connections$`,
+		sdk.acceptInvitationAndConnectWithReuse)
 	suite.Step(`^"([^"]*)" and "([^"]*)" confirm they reused their connections$`, sdk.confirmConnectionReuse)
-	suite.Step(`^"([^"]*)" creates an out-of-band invitation with an attached offer-credential message$`, sdk.createOOBInvitationWithOfferCredential) // nolint:lll
+	suite.Step(`^"([^"]*)" creates an out-of-band invitation with an attached offer-credential message$`,
+		sdk.createOOBInvitationWithOfferCredential)
 	suite.Step(`^"([^"]*)" accepts the offer-credential message from "([^"]*)"$`, sdk.acceptCredentialOffer)
 	suite.Step(`^"([^"]*)" is issued the credential$`, sdk.confirmCredentialReceived)
 	suite.Step(
-		`^"([^"]*)" creates another out-of-band invitation with the same public DID and an attached offer-credential message$`, // nolint:lll
-		sdk.createOOBInvitationReusePubDIDAndOfferCredential)
+		`^"([^"]*)" creates another out-of-band invitation with the same public DID and an attached `+
+			`offer-credential message$`, sdk.createOOBInvitationReusePubDIDAndOfferCredential)
+	suite.Step(`^"([^"]*)" creates an out-of-band-v2 invitation with embedded present proof v3 request`+
+		` as target service$`, sdk.createOOBV2WithPresentProof)
+	suite.Step(`^"([^"]*)" sends the request to "([^"]*)" and he accepts it by processing both OOBv2 and the `+
+		`embedded present proof v3 request$`, sdk.acceptOOBV2Invitation)
 }
 
 func (sdk *SDKSteps) createOOBInvitation(agentID string) error {
@@ -123,8 +144,8 @@ func (sdk *SDKSteps) createOOBInvitationWithOfferCredential(agent string) error 
 		return fmt.Errorf("'%s' failed to register oob client: %w", agent, err)
 	}
 
-	inv, err := sdk.newInvitation(agent, &issuecredential.OfferCredential{
-		Type:    issuecredential.OfferCredentialMsgType,
+	inv, err := sdk.newInvitation(agent, &issuecredential.OfferCredentialV2{
+		Type:    issuecredential.OfferCredentialMsgTypeV2,
 		Comment: "test",
 	})
 	if err != nil {
@@ -159,8 +180,8 @@ func (sdk *SDKSteps) createOOBInvitationReusePubDIDAndOfferCredential(agent stri
 			ID:       uuid.New().String(),
 			MimeType: "application/json",
 			Data: decorator.AttachmentData{
-				JSON: &issuecredential.OfferCredential{
-					Type:    issuecredential.OfferCredentialMsgType,
+				JSON: &issuecredential.OfferCredentialV2{
+					Type:    issuecredential.OfferCredentialMsgTypeV2,
 					Comment: "test",
 				},
 			},
@@ -188,7 +209,7 @@ func (sdk *SDKSteps) acceptCredentialOffer(holder, issuer string) error {
 
 	sdk.credName = uuid.New().String()
 
-	err = sdk.bddIssueCredSDK.AcceptCredential(holder, sdk.credName)
+	err = sdk.bddIssueCredSDK.AcceptCredential(holder, sdk.credName, false)
 	if err != nil {
 		return fmt.Errorf("'%s' failed to accept the credential: %w", holder, err)
 	}
@@ -483,10 +504,18 @@ func (sdk *SDKSteps) newInvitation(agentID string, attachments ...interface{}) (
 		})
 	}
 
-	inv, err := agent.CreateInvitation(
-		nil,
+	opts := []outofband.MessageOption{
 		outofband.WithLabel(agentID),
 		outofband.WithAttachments(attachDecorators...),
+	}
+
+	if sdk.accept != "" {
+		opts = append(opts, outofband.WithAccept(sdk.accept))
+	}
+
+	inv, err := agent.CreateInvitation(
+		nil,
+		opts...,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create invitation for %s : %w", agentID, err)
@@ -520,6 +549,26 @@ func (sdk *SDKSteps) CreateClients(agents string) error {
 		sdk.nextAction[agent] = make(chan interface{})
 
 		go sdk.autoExecuteActionEvent(agent, actions)
+	}
+
+	return nil
+}
+
+// CreateOOBV2Clients creates out-of-band v2 clients for the given agents.
+// 'agents' is a comma-separated string of agent identifiers.
+// The out-of-band clients are registered in the BDD context under their respective identifier.
+func (sdk *SDKSteps) CreateOOBV2Clients(agents string) error {
+	for _, agent := range strings.Split(agents, ",") {
+		if _, exists := sdk.context.OutOfBandV2Clients[agent]; exists {
+			continue
+		}
+
+		clientV2, err := outofbandv2.New(sdk.context.AgentCtx[agent])
+		if err != nil {
+			return fmt.Errorf("failed to create new oobv2 client for %s : %w", agent, err)
+		}
+
+		sdk.context.OutOfBandV2Clients[agent] = clientV2
 	}
 
 	return nil
@@ -562,9 +611,28 @@ func (sdk *SDKSteps) CreateInvitationWithDID(agent string) error {
 		return fmt.Errorf("no oob client found for %s", agent)
 	}
 
+	mtps := sdk.context.AgentCtx[agent].MediaTypeProfiles()
+	didCommV2 := false
+
+	for _, mtp := range mtps {
+		switch mtp {
+		case transport.MediaTypeDIDCommV2Profile, transport.MediaTypeAIP2RFC0587Profile:
+			didCommV2 = true
+		}
+
+		if didCommV2 {
+			break
+		}
+	}
+
+	if !didCommV2 && len(mtps) == 0 {
+		mtps = []string{transport.MediaTypeAIP2RFC0019Profile}
+	}
+
 	inv, err := client.CreateInvitation(
 		[]interface{}{did.ID},
 		outofband.WithLabel(agent),
+		outofband.WithAccept(mtps...),
 	)
 	if err != nil {
 		return fmt.Errorf("failed to create oob invitation for %s : %w", agent, err)
@@ -641,6 +709,128 @@ func (sdk *SDKSteps) ConnectAll(agents string) error {
 			}
 		}
 	}
+
+	return nil
+}
+
+const (
+	vpStr = `
+{
+  "@context": [
+    "https://www.w3.org/2018/credentials/v1",
+    "https://www.w3.org/2018/credentials/examples/v1"
+  ],
+  "id": "urn:uuid:3978344f-8596-4c3a-a978-8fcaba3903c5",
+  "type": [
+    "VerifiablePresentation",
+    "UniversityDegreeCredential"
+  ],
+  "verifiableCredential": [
+    {
+      "@context": [
+        "https://www.w3.org/2018/credentials/v1",
+        "https://www.w3.org/2018/credentials/examples/v1"
+      ],
+      "credentialSchema": [],
+      "credentialSubject": {
+        "degree": {
+          "type": "BachelorDegree",
+          "university": "MIT"
+        },
+        "id": "%s",
+        "name": "Jayden Doe",
+        "spouse": "did:example:c276e12ec21ebfeb1f712ebc6f1"
+      },
+      "expirationDate": "2025-01-01T19:23:24Z",
+      "id": "http://example.edu/credentials/1872",
+      "issuanceDate": "2010-01-01T19:23:24Z",
+      "issuer": {
+        "id": "did:example:76e12ec712ebc6f1c221ebfeb1f",
+        "name": "Example University"
+      },
+      "referenceNumber": 83294847,
+      "type": [
+        "VerifiableCredential",
+        "UniversityDegreeCredential"
+      ]
+    }
+  ],
+  "holder": "%s"
+}
+`
+	ppfGoal     = "present-proof/3.0/request-presentation"
+	ppfGoalCode = "https://didcomm.org/present-proof/3.0/request-presentation"
+)
+
+func (sdk *SDKSteps) createOOBV2WithPresentProof(agent1 string) error {
+	err := sdk.CreateOOBV2Clients(agent1)
+	if err != nil {
+		return fmt.Errorf("send OOBV2 failed to register %s client: %w", agent1, err)
+	}
+
+	oobv2Client1, ok := sdk.context.OutOfBandV2Clients[agent1]
+	if !ok {
+		return fmt.Errorf("missing oobv2 client for %s", agent1)
+	}
+
+	agentDIDDoc, ok := sdk.context.PublicDIDDocs[agent1]
+	if !ok {
+		return fmt.Errorf("oobv2: missing DID Doc for %s", agent1)
+	}
+
+	ppfv3Req := service.NewDIDCommMsgMap(presentproof.PresentationV3{
+		Type: presentproof.RequestPresentationMsgTypeV3,
+		Attachments: []decorator.AttachmentV2{{
+			Data: decorator.AttachmentData{
+				Base64: base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf(vpStr, agentDIDDoc.ID, agentDIDDoc.ID))),
+			},
+		}},
+	})
+
+	ppfv3Attachment := []*decorator.AttachmentV2{{
+		ID:          uuid.New().String(),
+		Description: "PresentProof V3 propose presentation request",
+		FileName:    "presentproofv3.json",
+		MediaType:   "application/json",
+		LastModTime: time.Time{},
+		Data: decorator.AttachmentData{
+			JSON: ppfv3Req,
+		},
+	}}
+
+	inv, err := oobv2Client1.CreateInvitation(
+		outofbandv2.WithGoal(ppfGoal, ppfGoalCode),
+		outofbandv2.WithAttachments(ppfv3Attachment...),
+		outofbandv2.WithFrom(agentDIDDoc.ID),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create invitation: %w", err)
+	}
+
+	sdk.pendingV2Invites[agent1] = inv
+
+	return nil
+}
+
+func (sdk *SDKSteps) acceptOOBV2Invitation(agent1, agent2 string) error {
+	err := sdk.CreateOOBV2Clients(agent2)
+	if err != nil {
+		return fmt.Errorf("send OOBV2 failed to register %s client: %w", agent2, err)
+	}
+
+	oobv2Client2, ok := sdk.context.OutOfBandV2Clients[agent2]
+	if !ok {
+		return fmt.Errorf("missing oobv2 client for %s", agent2)
+	}
+
+	inv := sdk.pendingV2Invites[agent1]
+
+	connID, err := oobv2Client2.AcceptInvitation(inv)
+	if err != nil {
+		return fmt.Errorf("failed to accept oobv2 invitation for %s : %w", agent1, err)
+	}
+
+	sdk.context.SaveConnectionID(agent2, agent1, connID)
 
 	return nil
 }

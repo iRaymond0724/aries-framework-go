@@ -45,8 +45,8 @@ import (
 func TestOperation_GetCredentialSpec(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
 		expected := randomCredSpec(t)
-		msg := service.NewDIDCommMsgMap(&issuecredential.OfferCredential{
-			Type: issuecredential.OfferCredentialMsgType,
+		msg := service.NewDIDCommMsgMap(&issuecredential.OfferCredentialV2{
+			Type: issuecredential.OfferCredentialMsgTypeV2,
 			Formats: []issuecredential.Format{{
 				AttachID: "123",
 				Format:   client.ProofVCDetailFormat,
@@ -115,7 +115,7 @@ func TestOperation_IssueCredential(t *testing.T) {
 		require.Equal(t, http.StatusOK, code)
 
 		result := &struct {
-			Msg *issuecredential.IssueCredential `json:"issue_credential"`
+			Msg *issuecredential.IssueCredentialV2 `json:"issue_credential"`
 		}{}
 
 		err = json.NewDecoder(response).Decode(result)

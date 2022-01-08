@@ -74,8 +74,8 @@ func TestSavePresentation(t *testing.T) {
 	t.Run("Presentations not provided", func(t *testing.T) {
 		metadata := mocks.NewMockMetadata(ctrl)
 		metadata.EXPECT().StateName().Return(stateNamePresentationReceived)
-		metadata.EXPECT().Message().Return(service.NewDIDCommMsgMap(presentproof.Presentation{
-			Type: presentproof.PresentationMsgType,
+		metadata.EXPECT().Message().Return(service.NewDIDCommMsgMap(presentproof.PresentationV2{
+			Type: presentproof.PresentationMsgTypeV2,
 		}))
 
 		err := SavePresentation(provider)(next).Handle(metadata)
@@ -85,8 +85,8 @@ func TestSavePresentation(t *testing.T) {
 	t.Run("Marshal presentation error", func(t *testing.T) {
 		metadata := mocks.NewMockMetadata(ctrl)
 		metadata.EXPECT().StateName().Return(stateNamePresentationReceived)
-		metadata.EXPECT().Message().Return(service.NewDIDCommMsgMap(presentproof.Presentation{
-			Type: presentproof.PresentationMsgType,
+		metadata.EXPECT().Message().Return(service.NewDIDCommMsgMap(presentproof.PresentationV2{
+			Type: presentproof.PresentationMsgTypeV2,
 			PresentationsAttach: []decorator.Attachment{
 				{Data: decorator.AttachmentData{JSON: struct{ C chan int }{}}},
 			},
@@ -108,8 +108,8 @@ func TestSavePresentation(t *testing.T) {
 	t.Run("Invalid presentation", func(t *testing.T) {
 		metadata := mocks.NewMockMetadata(ctrl)
 		metadata.EXPECT().StateName().Return(stateNamePresentationReceived)
-		metadata.EXPECT().Message().Return(service.NewDIDCommMsgMap(presentproof.Presentation{
-			Type: presentproof.PresentationMsgType,
+		metadata.EXPECT().Message().Return(service.NewDIDCommMsgMap(presentproof.PresentationV2{
+			Type: presentproof.PresentationMsgTypeV2,
 			PresentationsAttach: []decorator.Attachment{
 				{Data: decorator.AttachmentData{JSON: &verifiable.Presentation{
 					Context: []string{"https://www.w3.org/2018/presentation/v1"},
@@ -134,8 +134,8 @@ func TestSavePresentation(t *testing.T) {
 			myDIDKey:    myDIDKey,
 			theirDIDKey: theirDIDKey,
 		})
-		metadata.EXPECT().Message().Return(service.NewDIDCommMsgMap(presentproof.Presentation{
-			Type: presentproof.PresentationMsgType,
+		metadata.EXPECT().Message().Return(service.NewDIDCommMsgMap(presentproof.PresentationV2{
+			Type: presentproof.PresentationMsgTypeV2,
 			PresentationsAttach: []decorator.Attachment{
 				{Data: decorator.AttachmentData{Base64: base64.StdEncoding.EncodeToString([]byte(vpJWS))}},
 			},
@@ -164,8 +164,8 @@ func TestSavePresentation(t *testing.T) {
 		metadata := mocks.NewMockMetadata(ctrl)
 		metadata.EXPECT().StateName().Return(stateNamePresentationReceived)
 		metadata.EXPECT().Properties().Return(map[string]interface{}{})
-		metadata.EXPECT().Message().Return(service.NewDIDCommMsgMap(presentproof.Presentation{
-			Type: presentproof.PresentationMsgType,
+		metadata.EXPECT().Message().Return(service.NewDIDCommMsgMap(presentproof.PresentationV2{
+			Type: presentproof.PresentationMsgTypeV2,
 			PresentationsAttach: []decorator.Attachment{
 				{Data: decorator.AttachmentData{Base64: base64.StdEncoding.EncodeToString([]byte(vpJWS))}},
 			},
@@ -198,8 +198,8 @@ func TestSavePresentation(t *testing.T) {
 		metadata.EXPECT().StateName().Return(stateNamePresentationReceived)
 		metadata.EXPECT().PresentationNames().Return(nil)
 		metadata.EXPECT().Properties().Return(props)
-		metadata.EXPECT().Message().Return(service.NewDIDCommMsgMap(presentproof.Presentation{
-			Type: presentproof.PresentationMsgType,
+		metadata.EXPECT().Message().Return(service.NewDIDCommMsgMap(presentproof.PresentationV2{
+			Type: presentproof.PresentationMsgTypeV2,
 			PresentationsAttach: []decorator.Attachment{
 				{Data: decorator.AttachmentData{Base64: base64.StdEncoding.EncodeToString([]byte(vpJWSNoID))}},
 			},
@@ -226,7 +226,7 @@ func TestSavePresentation(t *testing.T) {
 		require.NotEmpty(t, props["names"].([]string)[0])
 	})
 
-	t.Run("Success", func(t *testing.T) {
+	t.Run("Success v2", func(t *testing.T) {
 		const vcName = "vc-name"
 
 		props := map[string]interface{}{
@@ -238,9 +238,48 @@ func TestSavePresentation(t *testing.T) {
 		metadata.EXPECT().StateName().Return(stateNamePresentationReceived)
 		metadata.EXPECT().PresentationNames().Return([]string{vcName}).Times(2)
 		metadata.EXPECT().Properties().Return(props)
-		metadata.EXPECT().Message().Return(service.NewDIDCommMsgMap(presentproof.Presentation{
-			Type: presentproof.PresentationMsgType,
+		metadata.EXPECT().Message().Return(service.NewDIDCommMsgMap(presentproof.PresentationV2{
+			Type: presentproof.PresentationMsgTypeV2,
 			PresentationsAttach: []decorator.Attachment{
+				{Data: decorator.AttachmentData{Base64: base64.StdEncoding.EncodeToString([]byte(vpJWS))}},
+			},
+		}))
+
+		verifiableStore := mocksstore.NewMockStore(ctrl)
+		verifiableStore.EXPECT().SavePresentation(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+			Return(nil)
+
+		loader, err := ldtestutil.DocumentLoader()
+		require.NoError(t, err)
+
+		registry := mocksvdr.NewMockRegistry(ctrl)
+		registry.EXPECT().Resolve("did:example:ebfeb1f712ebc6f1c276e12ec21").Return(
+			&did.DocResolution{DIDDocument: &did.Doc{VerificationMethod: []did.VerificationMethod{pubKey}}}, nil)
+
+		provider := mocks.NewMockProvider(ctrl)
+		provider.EXPECT().VDRegistry().Return(registry).AnyTimes()
+		provider.EXPECT().VerifiableStore().Return(verifiableStore)
+		provider.EXPECT().JSONLDDocumentLoader().Return(loader)
+
+		require.NoError(t, SavePresentation(provider)(next).Handle(metadata))
+		require.Equal(t, props["names"], []string{vcName})
+	})
+
+	t.Run("Success v3", func(t *testing.T) {
+		const vcName = "vc-name"
+
+		props := map[string]interface{}{
+			myDIDKey:    myDIDKey,
+			theirDIDKey: theirDIDKey,
+		}
+
+		metadata := mocks.NewMockMetadata(ctrl)
+		metadata.EXPECT().StateName().Return(stateNamePresentationReceived)
+		metadata.EXPECT().PresentationNames().Return([]string{vcName}).Times(2)
+		metadata.EXPECT().Properties().Return(props)
+		metadata.EXPECT().Message().Return(service.NewDIDCommMsgMap(presentproof.PresentationV3{
+			Type: presentproof.PresentationMsgTypeV3,
+			Attachments: []decorator.AttachmentV2{
 				{Data: decorator.AttachmentData{Base64: base64.StdEncoding.EncodeToString([]byte(vpJWS))}},
 			},
 		}))
@@ -303,8 +342,8 @@ func TestPresentationDefinition(t *testing.T) {
 		metadata := mocks.NewMockMetadata(ctrl)
 		metadata.EXPECT().StateName().Return(stateNameRequestReceived)
 		metadata.EXPECT().Presentation().Return(nil)
-		metadata.EXPECT().Message().Return(service.NewDIDCommMsgMap(presentproof.RequestPresentation{
-			Type: presentproof.RequestPresentationMsgType,
+		metadata.EXPECT().Message().Return(service.NewDIDCommMsgMap(presentproof.RequestPresentationV2{
+			Type: presentproof.RequestPresentationMsgTypeV2,
 		}))
 
 		require.Nil(t, PresentationDefinition(provider)(next).Handle(metadata))
@@ -323,13 +362,13 @@ func TestPresentationDefinition(t *testing.T) {
 	t.Run("No attachment", func(t *testing.T) {
 		metadata := mocks.NewMockMetadata(ctrl)
 		metadata.EXPECT().StateName().Return(stateNameRequestReceived)
-		metadata.EXPECT().Presentation().Return(&presentproof.Presentation{}).AnyTimes()
-		metadata.EXPECT().Message().Return(service.NewDIDCommMsgMap(presentproof.RequestPresentation{
+		metadata.EXPECT().Presentation().Return(&presentproof.PresentationV2{}).AnyTimes()
+		metadata.EXPECT().Message().Return(service.NewDIDCommMsgMap(presentproof.RequestPresentationV2{
 			Formats: []presentproof.Format{{
 				AttachID: uuid.New().String(),
 				Format:   peDefinitionFormat,
 			}},
-			Type: presentproof.RequestPresentationMsgType,
+			Type: presentproof.RequestPresentationMsgTypeV2,
 		}))
 
 		const errMsg = "get attachment by format: not found"
@@ -341,13 +380,13 @@ func TestPresentationDefinition(t *testing.T) {
 
 		metadata := mocks.NewMockMetadata(ctrl)
 		metadata.EXPECT().StateName().Return(stateNameRequestReceived)
-		metadata.EXPECT().Presentation().Return(&presentproof.Presentation{}).AnyTimes()
-		metadata.EXPECT().Message().Return(service.NewDIDCommMsgMap(presentproof.RequestPresentation{
+		metadata.EXPECT().Presentation().Return(&presentproof.PresentationV2{}).AnyTimes()
+		metadata.EXPECT().Message().Return(service.NewDIDCommMsgMap(presentproof.RequestPresentationV2{
 			Formats: []presentproof.Format{{
 				AttachID: ID,
 				Format:   peDefinitionFormat,
 			}},
-			Type: presentproof.RequestPresentationMsgType,
+			Type: presentproof.RequestPresentationMsgTypeV2,
 			RequestPresentationsAttach: []decorator.Attachment{{
 				ID: ID,
 				Data: decorator.AttachmentData{
@@ -365,7 +404,7 @@ func TestPresentationDefinition(t *testing.T) {
 
 		metadata := mocks.NewMockMetadata(ctrl)
 		metadata.EXPECT().StateName().Return(stateNameRequestReceived)
-		metadata.EXPECT().Presentation().Return(&presentproof.Presentation{
+		metadata.EXPECT().Presentation().Return(&presentproof.PresentationV2{
 			PresentationsAttach: []decorator.Attachment{{
 				MimeType: mimeTypeApplicationLdJSON,
 				Data: decorator.AttachmentData{
@@ -383,12 +422,12 @@ func TestPresentationDefinition(t *testing.T) {
 				},
 			}},
 		}).AnyTimes()
-		metadata.EXPECT().Message().Return(service.NewDIDCommMsgMap(presentproof.RequestPresentation{
+		metadata.EXPECT().Message().Return(service.NewDIDCommMsgMap(presentproof.RequestPresentationV2{
 			Formats: []presentproof.Format{{
 				AttachID: ID,
 				Format:   peDefinitionFormat,
 			}},
-			Type: presentproof.RequestPresentationMsgType,
+			Type: presentproof.RequestPresentationMsgTypeV2,
 			RequestPresentationsAttach: []decorator.Attachment{{
 				ID: ID,
 				Data: decorator.AttachmentData{
@@ -427,7 +466,7 @@ func TestPresentationDefinition(t *testing.T) {
 		metadata.EXPECT().GetAddProofFn().Return(func(presentation *verifiable.Presentation) error {
 			return errors.New("test")
 		})
-		metadata.EXPECT().Presentation().Return(&presentproof.Presentation{
+		metadata.EXPECT().Presentation().Return(&presentproof.PresentationV2{
 			PresentationsAttach: []decorator.Attachment{{
 				MimeType: mimeTypeApplicationLdJSON,
 				Data: decorator.AttachmentData{
@@ -456,12 +495,12 @@ func TestPresentationDefinition(t *testing.T) {
 				},
 			}},
 		}).AnyTimes()
-		metadata.EXPECT().Message().Return(service.NewDIDCommMsgMap(presentproof.RequestPresentation{
+		metadata.EXPECT().Message().Return(service.NewDIDCommMsgMap(presentproof.RequestPresentationV2{
 			Formats: []presentproof.Format{{
 				AttachID: ID,
 				Format:   peDefinitionFormat,
 			}},
-			Type: presentproof.RequestPresentationMsgType,
+			Type: presentproof.RequestPresentationMsgTypeV2,
 			RequestPresentationsAttach: []decorator.Attachment{{
 				ID: ID,
 				Data: decorator.AttachmentData{
@@ -492,13 +531,13 @@ func TestPresentationDefinition(t *testing.T) {
 		require.EqualError(t, PresentationDefinition(provider)(next).Handle(metadata), "add proof: test")
 	})
 
-	t.Run("Success", func(t *testing.T) {
+	t.Run("Success v2", func(t *testing.T) {
 		ID := uuid.New().String()
 
 		metadata := mocks.NewMockMetadata(ctrl)
 		metadata.EXPECT().StateName().Return(stateNameRequestReceived)
 		metadata.EXPECT().GetAddProofFn().Return(nil)
-		metadata.EXPECT().Presentation().Return(&presentproof.Presentation{
+		metadata.EXPECT().Presentation().Return(&presentproof.PresentationV2{
 			PresentationsAttach: []decorator.Attachment{{
 				MimeType: mimeTypeApplicationLdJSON,
 				Data: decorator.AttachmentData{
@@ -527,14 +566,82 @@ func TestPresentationDefinition(t *testing.T) {
 				},
 			}},
 		}).AnyTimes()
-		metadata.EXPECT().Message().Return(service.NewDIDCommMsgMap(presentproof.RequestPresentation{
+		metadata.EXPECT().Message().Return(service.NewDIDCommMsgMap(presentproof.RequestPresentationV2{
 			Formats: []presentproof.Format{{
 				AttachID: ID,
 				Format:   peDefinitionFormat,
 			}},
-			Type: presentproof.RequestPresentationMsgType,
+			Type: presentproof.RequestPresentationMsgTypeV2,
 			RequestPresentationsAttach: []decorator.Attachment{{
 				ID: ID,
+				Data: decorator.AttachmentData{
+					JSON: map[string]interface{}{
+						"presentation_definition": &presexch.PresentationDefinition{
+							ID: uuid.New().String(),
+							InputDescriptors: []*presexch.InputDescriptor{{
+								ID: uuid.New().String(),
+								Schema: []*presexch.Schema{{
+									URI: fmt.Sprintf("%s#%s", verifiable.ContextID, verifiable.VCType),
+								}},
+								Constraints: &presexch.Constraints{
+									Fields: []*presexch.Field{{
+										Path:   []string{"$.first_name"},
+										Filter: &presexch.Filter{Type: &strFilterType},
+									}, {
+										Path:   []string{"$.last_name"},
+										Filter: &presexch.Filter{Type: &strFilterType},
+									}},
+								},
+							}},
+						},
+					},
+				},
+			}},
+		}))
+
+		require.Nil(t, PresentationDefinition(provider, WithAddProofFn(AddBBSProofFn(provider)))(next).Handle(metadata))
+	})
+
+	t.Run("Success v3", func(t *testing.T) {
+		ID := uuid.New().String()
+
+		metadata := mocks.NewMockMetadata(ctrl)
+		metadata.EXPECT().StateName().Return(stateNameRequestReceived)
+		metadata.EXPECT().GetAddProofFn().Return(nil)
+		metadata.EXPECT().PresentationV3().Return(&presentproof.PresentationV3{
+			Attachments: []decorator.AttachmentV2{{
+				MediaType: mimeTypeApplicationLdJSON,
+				Data: decorator.AttachmentData{
+					JSON: &verifiable.Credential{
+						ID:      "http://example.edu/credentials/1872",
+						Context: []string{verifiable.ContextURI},
+						Types:   []string{verifiable.VCType},
+						Subject: "did:example:76e12ec712ebc6f1c221ebfeb1f",
+						Issued: &util.TimeWrapper{
+							Time: time.Now(),
+						},
+						Issuer: verifiable.Issuer{
+							ID: "did:example:76e12ec712ebc6f1c221ebfeb1f",
+						},
+						CustomFields: map[string]interface{}{
+							"first_name": "First name",
+							"last_name":  "Last name",
+							"info":       "Info",
+						},
+					},
+				},
+			}, {
+				MediaType: "application/json",
+				Data: decorator.AttachmentData{
+					JSON: map[string]struct{}{},
+				},
+			}},
+		}).AnyTimes()
+		metadata.EXPECT().Message().Return(service.NewDIDCommMsgMap(presentproof.RequestPresentationV3{
+			Type: presentproof.RequestPresentationMsgTypeV3,
+			Attachments: []decorator.AttachmentV2{{
+				ID:     ID,
+				Format: peDefinitionFormat,
 				Data: decorator.AttachmentData{
 					JSON: map[string]interface{}{
 						"presentation_definition": &presexch.PresentationDefinition{

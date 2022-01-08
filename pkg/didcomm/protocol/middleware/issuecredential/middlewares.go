@@ -9,10 +9,12 @@ package issuecredential
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/piprate/json-gold/ld"
 
+	"github.com/hyperledger/aries-framework-go/pkg/didcomm/common/service"
 	"github.com/hyperledger/aries-framework-go/pkg/didcomm/protocol/decorator"
 	"github.com/hyperledger/aries-framework-go/pkg/didcomm/protocol/issuecredential"
 	"github.com/hyperledger/aries-framework-go/pkg/doc/verifiable"
@@ -21,10 +23,15 @@ import (
 )
 
 const (
+	// SkipCredentialSaveKey is present in metadata properties as `true` then accepted credential will not be saved in
+	// verifiable store by middleware.
+	SkipCredentialSaveKey = "skip-credential-save"
+
 	stateNameCredentialReceived = "credential-received"
 	myDIDKey                    = "myDID"
 	theirDIDKey                 = "theirDID"
 	namesKey                    = "names"
+	mimeTypeAll                 = "*"
 )
 
 // Metadata is an alias to the original Metadata.
@@ -38,7 +45,7 @@ type Provider interface {
 }
 
 // SaveCredentials the helper function for the issue credential protocol which saves credentials.
-func SaveCredentials(p Provider) issuecredential.Middleware {
+func SaveCredentials(p Provider) issuecredential.Middleware { //nolint: funlen,gocognit,gocyclo
 	vdr := p.VDRegistry()
 	store := p.VerifiableStore()
 	documentLoader := p.JSONLDDocumentLoader()
@@ -49,14 +56,23 @@ func SaveCredentials(p Provider) issuecredential.Middleware {
 				return next.Handle(metadata)
 			}
 
-			credential := issuecredential.IssueCredential{}
+			properties := metadata.Properties()
 
-			err := metadata.Message().Decode(&credential)
-			if err != nil {
-				return fmt.Errorf("decode: %w", err)
+			// skip storage if SkipCredentialSaveKey is enabled
+			if val, ok := properties[SkipCredentialSaveKey]; ok {
+				if skip, ok := val.(bool); ok && skip {
+					return next.Handle(metadata)
+				}
 			}
 
-			credentials, err := toVerifiableCredentials(vdr, credential.CredentialsAttach, documentLoader)
+			msg := metadata.Message()
+
+			attachments, err := getAttachments(msg)
+			if err != nil {
+				return fmt.Errorf("get attachments: %w", err)
+			}
+
+			credentials, err := toVerifiableCredentials(vdr, attachments, documentLoader)
 			if err != nil {
 				return fmt.Errorf("to verifiable credentials: %w", err)
 			}
@@ -66,7 +82,6 @@ func SaveCredentials(p Provider) issuecredential.Middleware {
 			}
 
 			var names []string
-			properties := metadata.Properties()
 
 			// nolint: errcheck
 			myDID, _ := properties[myDIDKey].(string)
@@ -95,6 +110,24 @@ func SaveCredentials(p Provider) issuecredential.Middleware {
 	}
 }
 
+func getAttachments(msg service.DIDCommMsg) ([]decorator.AttachmentData, error) {
+	if strings.HasPrefix(msg.Type(), issuecredential.SpecV3) {
+		cred := issuecredential.IssueCredentialV3{}
+		if err := msg.Decode(&cred); err != nil {
+			return nil, fmt.Errorf("decode: %w", err)
+		}
+
+		return filterByMediaType(cred.Attachments, mimeTypeAll), nil
+	}
+
+	cred := issuecredential.IssueCredentialV2{}
+	if err := msg.Decode(&cred); err != nil {
+		return nil, fmt.Errorf("decode: %w", err)
+	}
+
+	return filterByMimeType(cred.CredentialsAttach, mimeTypeAll), nil
+}
+
 func getName(idx int, id string, metadata issuecredential.Metadata) string {
 	name := id
 	if len(metadata.CredentialNames()) > idx {
@@ -108,12 +141,12 @@ func getName(idx int, id string, metadata issuecredential.Metadata) string {
 	return uuid.New().String()
 }
 
-func toVerifiableCredentials(v vdrapi.Registry, attachments []decorator.Attachment,
+func toVerifiableCredentials(v vdrapi.Registry, attachments []decorator.AttachmentData,
 	documentLoader ld.DocumentLoader) ([]*verifiable.Credential, error) {
 	var credentials []*verifiable.Credential
 
 	for i := range attachments {
-		rawVC, err := attachments[i].Data.Fetch()
+		rawVC, err := attachments[i].Fetch()
 		if err != nil {
 			return nil, fmt.Errorf("fetch: %w", err)
 		}
@@ -129,4 +162,32 @@ func toVerifiableCredentials(v vdrapi.Registry, attachments []decorator.Attachme
 	}
 
 	return credentials, nil
+}
+
+func filterByMimeType(attachments []decorator.Attachment, mimeType string) []decorator.AttachmentData {
+	var result []decorator.AttachmentData
+
+	for i := range attachments {
+		if attachments[i].MimeType != mimeType && mimeType != mimeTypeAll {
+			continue
+		}
+
+		result = append(result, attachments[i].Data)
+	}
+
+	return result
+}
+
+func filterByMediaType(attachments []decorator.AttachmentV2, mediaType string) []decorator.AttachmentData {
+	var result []decorator.AttachmentData
+
+	for i := range attachments {
+		if attachments[i].MediaType != mediaType && mediaType != mimeTypeAll {
+			continue
+		}
+
+		result = append(result, attachments[i].Data)
+	}
+
+	return result
 }

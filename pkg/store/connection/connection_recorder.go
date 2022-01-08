@@ -57,6 +57,16 @@ func (c *Recorder) SaveInvitation(id string, invitation interface{}) error {
 	return marshalAndSave(getInvitationKeyPrefix()(id), invitation, c.store)
 }
 
+// SaveOOBv2Invitation saves OOBv2 invitation in permanent store under given ID.
+// TODO should avoid using target of type `interface{}` [Issue #1030].
+func (c *Recorder) SaveOOBv2Invitation(myDID string, invitation interface{}) error {
+	if myDID == "" {
+		return fmt.Errorf(errMsgInvalidKey)
+	}
+
+	return marshalAndSave(getOOBInvitationV2KeyPrefix()(tagValueFromDIDs(myDID)), invitation, c.store)
+}
+
 // SaveConnectionRecord saves given connection records in underlying store.
 func (c *Recorder) SaveConnectionRecord(record *Record) error {
 	if err := marshalAndSave(getConnectionKeyPrefix()(record.ConnectionID),
@@ -83,14 +93,16 @@ func (c *Recorder) SaveConnectionRecord(record *Record) error {
 			record, c.store, storage.Tag{
 				Name:  getConnectionKeyPrefix()(""),
 				Value: getConnectionKeyPrefix()(record.ConnectionID),
+			},
+			storage.Tag{
+				Name:  bothDIDsTagName,
+				Value: tagValueFromDIDs(record.MyDID, record.TheirDID),
+			},
+			storage.Tag{
+				Name:  theirDIDTagName,
+				Value: tagValueFromDIDs(record.TheirDID),
 			}); err != nil {
 			return fmt.Errorf("save connection record in permanent store: %w", err)
-		}
-
-		// create map between DIDs and ConnectionID
-		if err := c.store.Put(getDIDConnMapKeyPrefix()(record.MyDID, record.TheirDID),
-			[]byte(record.ConnectionID)); err != nil {
-			return fmt.Errorf("save did and connection map in store: %w", err)
 		}
 	}
 
@@ -164,12 +176,6 @@ func (c *Recorder) RemoveConnection(connectionID string) error {
 	err = c.store.Delete(getConnectionKeyPrefix()(connectionID))
 	if err != nil {
 		return fmt.Errorf("unable to delete connection record from the store: connectionid=%s err=%w", connectionID, err)
-	}
-
-	err = c.store.Delete(getDIDConnMapKeyPrefix()(record.MyDID, record.TheirDID))
-	if err != nil {
-		return fmt.Errorf("unable to delete did mapping connection record from the store: connectionid=%s err=%w",
-			connectionID, err)
 	}
 
 	// remove namespace, threadID and connection ID mapping from protocol state store

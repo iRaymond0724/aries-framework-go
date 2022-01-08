@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/golang/mock/gomock"
+	"github.com/google/uuid"
 	"github.com/piprate/json-gold/ld"
 	"github.com/stretchr/testify/require"
 
@@ -23,9 +24,13 @@ import (
 	didcomm "github.com/hyperledger/aries-framework-go/pkg/didcomm/common/service"
 	protocol "github.com/hyperledger/aries-framework-go/pkg/didcomm/protocol/issuecredential"
 	vdrapi "github.com/hyperledger/aries-framework-go/pkg/framework/aries/api/vdr"
-	mocks "github.com/hyperledger/aries-framework-go/pkg/internal/gomocks/client/issuecredential"
+	clientmocks "github.com/hyperledger/aries-framework-go/pkg/internal/gomocks/client/issuecredential"
+	mocks "github.com/hyperledger/aries-framework-go/pkg/internal/gomocks/controller/command/issuecredential"
 	mocknotifier "github.com/hyperledger/aries-framework-go/pkg/internal/gomocks/controller/webnotifier"
 	"github.com/hyperledger/aries-framework-go/pkg/kms"
+	mockprovider "github.com/hyperledger/aries-framework-go/pkg/mock/provider"
+	mockstore "github.com/hyperledger/aries-framework-go/pkg/mock/storage"
+	"github.com/hyperledger/aries-framework-go/pkg/store/connection"
 	"github.com/hyperledger/aries-framework-go/spi/storage"
 )
 
@@ -36,12 +41,13 @@ func TestNew(t *testing.T) {
 	defer ctrl.Finish()
 
 	t.Run("Success", func(t *testing.T) {
-		service := mocks.NewMockProtocolService(ctrl)
+		service := clientmocks.NewMockProtocolService(ctrl)
 		service.EXPECT().RegisterActionEvent(gomock.Any()).Return(nil)
 		service.EXPECT().RegisterMsgEvent(gomock.Any()).Return(nil)
 
 		provider := mocks.NewMockProvider(ctrl)
 		provider.EXPECT().Service(gomock.Any()).Return(service, nil)
+		provider.EXPECT().ConnectionLookup().Return(nil).AnyTimes()
 
 		cmd, err := New(provider, mocknotifier.NewMockNotifier(nil))
 		require.NoError(t, err)
@@ -54,6 +60,7 @@ func TestNew(t *testing.T) {
 	t.Run("Success - autoExecuteRFC0593", func(t *testing.T) {
 		provider := mocks.NewMockProvider(ctrl)
 		provider.EXPECT().Service(gomock.Any()).Return(&mockProtocol{}, nil).MaxTimes(2)
+		provider.EXPECT().ConnectionLookup().Return(nil).AnyTimes()
 
 		cmd, err := New(provider, mocknotifier.NewMockNotifier(nil), WithAutoExecuteRFC0593(&mockRFC0593Provider{}))
 		require.NoError(t, err)
@@ -66,6 +73,7 @@ func TestNew(t *testing.T) {
 	t.Run("Create client (error)", func(t *testing.T) {
 		provider := mocks.NewMockProvider(ctrl)
 		provider.EXPECT().Service(gomock.Any()).Return(nil, nil)
+		provider.EXPECT().ConnectionLookup().Return(nil).AnyTimes()
 
 		cmd, err := New(provider, mocknotifier.NewMockNotifier(nil))
 		require.EqualError(t, err, "cannot create a client: cast service to issuecredential service failed")
@@ -73,12 +81,13 @@ func TestNew(t *testing.T) {
 	})
 
 	t.Run("Register action event (error)", func(t *testing.T) {
-		service := mocks.NewMockProtocolService(ctrl)
+		service := clientmocks.NewMockProtocolService(ctrl)
 		service.EXPECT().RegisterMsgEvent(gomock.Any())
 		service.EXPECT().RegisterActionEvent(gomock.Any()).Return(errors.New("error"))
 
 		provider := mocks.NewMockProvider(ctrl)
 		provider.EXPECT().Service(gomock.Any()).Return(service, nil)
+		provider.EXPECT().ConnectionLookup().Return(nil).AnyTimes()
 
 		cmd, err := New(provider, mocknotifier.NewMockNotifier(nil))
 		require.EqualError(t, err, "register action event: error")
@@ -86,11 +95,12 @@ func TestNew(t *testing.T) {
 	})
 
 	t.Run("Register msg event (error)", func(t *testing.T) {
-		service := mocks.NewMockProtocolService(ctrl)
+		service := clientmocks.NewMockProtocolService(ctrl)
 		service.EXPECT().RegisterMsgEvent(gomock.Any()).Return(errors.New("error"))
 
 		provider := mocks.NewMockProvider(ctrl)
 		provider.EXPECT().Service(gomock.Any()).Return(service, nil)
+		provider.EXPECT().ConnectionLookup().Return(nil).AnyTimes()
 
 		cmd, err := New(provider, mocknotifier.NewMockNotifier(nil))
 		require.EqualError(t, err, "register msg event: error")
@@ -102,12 +112,13 @@ func TestCommand_Actions(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	service := mocks.NewMockProtocolService(ctrl)
+	service := clientmocks.NewMockProtocolService(ctrl)
 	service.EXPECT().RegisterActionEvent(gomock.Any()).Return(nil).AnyTimes()
 	service.EXPECT().RegisterMsgEvent(gomock.Any()).Return(nil).AnyTimes()
 
 	provider := mocks.NewMockProvider(ctrl)
 	provider.EXPECT().Service(gomock.Any()).Return(service, nil).AnyTimes()
+	provider.EXPECT().ConnectionLookup().Return(nil).AnyTimes()
 
 	t.Run("Success", func(t *testing.T) {
 		expected := ActionsResponse{Actions: []issuecredential.Action{{
@@ -149,12 +160,7 @@ func TestCommand_SendOffer(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	service := mocks.NewMockProtocolService(ctrl)
-	service.EXPECT().RegisterActionEvent(gomock.Any()).Return(nil).AnyTimes()
-	service.EXPECT().RegisterMsgEvent(gomock.Any()).Return(nil).AnyTimes()
-
-	provider := mocks.NewMockProvider(ctrl)
-	provider.EXPECT().Service(gomock.Any()).Return(service, nil).AnyTimes()
+	provider := mockProvider(ctrl, nil)
 
 	t.Run("Decode error", func(t *testing.T) {
 		cmd, err := New(provider, mocknotifier.NewMockNotifier(nil))
@@ -211,8 +217,26 @@ func TestCommand_SendOffer(t *testing.T) {
 		require.Equal(t, command.ValidationError, cmdErr.Type())
 	})
 
+	t.Run("Missing connection", func(t *testing.T) {
+		rec := mockConnectionRecorder(t)
+		provider := mockProvider(ctrl, rec.Lookup)
+
+		cmd, err := New(provider, mocknotifier.NewMockNotifier(nil))
+		require.NoError(t, err)
+		require.NotNil(t, cmd)
+
+		var b bytes.Buffer
+		const jsonPayload = `{"my_did":"id","their_did":"id","offer_credential":{}}`
+		cmdErr := cmd.SendOffer(&b, bytes.NewBufferString(jsonPayload))
+
+		require.Error(t, cmdErr)
+		require.Contains(t, cmdErr.Error(), errMissingConnection)
+		require.Equal(t, InvalidRequestErrorCode, cmdErr.Code())
+		require.Equal(t, command.ValidationError, cmdErr.Type())
+	})
+
 	t.Run("SendOffer (error)", func(t *testing.T) {
-		service := mocks.NewMockProtocolService(ctrl)
+		service := clientmocks.NewMockProtocolService(ctrl)
 		service.EXPECT().RegisterActionEvent(gomock.Any()).Return(nil)
 		service.EXPECT().RegisterMsgEvent(gomock.Any()).Return(nil)
 		service.EXPECT().HandleOutbound(
@@ -220,8 +244,14 @@ func TestCommand_SendOffer(t *testing.T) {
 			gomock.Any(),
 		).Return("", errors.New("some error message"))
 
+		rec := mockConnectionRecorder(t, connection.Record{
+			MyDID:    "id",
+			TheirDID: "id",
+		})
+
 		provider := mocks.NewMockProvider(ctrl)
 		provider.EXPECT().Service(gomock.Any()).Return(service, nil)
+		provider.EXPECT().ConnectionLookup().Return(rec.Lookup).AnyTimes()
 
 		cmd, err := New(provider, mocknotifier.NewMockNotifier(nil))
 		require.NoError(t, err)
@@ -238,13 +268,77 @@ func TestCommand_SendOffer(t *testing.T) {
 	})
 
 	t.Run("Success", func(t *testing.T) {
-		service := mocks.NewMockProtocolService(ctrl)
+		service := clientmocks.NewMockProtocolService(ctrl)
 		service.EXPECT().RegisterActionEvent(gomock.Any()).Return(nil)
 		service.EXPECT().RegisterMsgEvent(gomock.Any()).Return(nil)
 		service.EXPECT().HandleOutbound(gomock.Any(), gomock.Any(), gomock.Any())
 
+		rec := mockConnectionRecorder(t, connection.Record{
+			MyDID:    "id",
+			TheirDID: "id",
+		})
+
 		provider := mocks.NewMockProvider(ctrl)
 		provider.EXPECT().Service(gomock.Any()).Return(service, nil)
+		provider.EXPECT().ConnectionLookup().Return(rec.Lookup).AnyTimes()
+
+		cmd, err := New(provider, mocknotifier.NewMockNotifier(nil))
+		require.NoError(t, err)
+		require.NotNil(t, cmd)
+
+		var b bytes.Buffer
+		const jsonPayload = `{"my_did":"id","their_did":"id","offer_credential":{}}`
+		require.NoError(t, cmd.SendOffer(&b, bytes.NewBufferString(jsonPayload)))
+	})
+
+	t.Run("SendOffer (error) v3", func(t *testing.T) {
+		service := clientmocks.NewMockProtocolService(ctrl)
+		service.EXPECT().RegisterActionEvent(gomock.Any()).Return(nil)
+		service.EXPECT().RegisterMsgEvent(gomock.Any()).Return(nil)
+		service.EXPECT().HandleOutbound(
+			gomock.Any(), gomock.Any(),
+			gomock.Any(),
+		).Return("", errors.New("some error message"))
+
+		rec := mockConnectionRecorder(t, connection.Record{
+			MyDID:          "id",
+			TheirDID:       "id",
+			DIDCommVersion: didcomm.V2,
+		})
+
+		provider := mocks.NewMockProvider(ctrl)
+		provider.EXPECT().Service(gomock.Any()).Return(service, nil)
+		provider.EXPECT().ConnectionLookup().Return(rec.Lookup).AnyTimes()
+
+		cmd, err := New(provider, mocknotifier.NewMockNotifier(nil))
+		require.NoError(t, err)
+		require.NotNil(t, cmd)
+
+		var b bytes.Buffer
+		const jsonPayload = `{"my_did":"id","their_did":"id","offer_credential":{}}`
+		cmdErr := cmd.SendOffer(&b, bytes.NewBufferString(jsonPayload))
+
+		require.Error(t, cmdErr)
+		require.Contains(t, cmdErr.Error(), "some error message")
+		require.Equal(t, SendOfferErrorCode, cmdErr.Code())
+		require.Equal(t, command.ExecuteError, cmdErr.Type())
+	})
+
+	t.Run("Success v3", func(t *testing.T) {
+		service := clientmocks.NewMockProtocolService(ctrl)
+		service.EXPECT().RegisterActionEvent(gomock.Any()).Return(nil)
+		service.EXPECT().RegisterMsgEvent(gomock.Any()).Return(nil)
+		service.EXPECT().HandleOutbound(gomock.Any(), gomock.Any(), gomock.Any())
+
+		rec := mockConnectionRecorder(t, connection.Record{
+			MyDID:          "id",
+			TheirDID:       "id",
+			DIDCommVersion: didcomm.V2,
+		})
+
+		provider := mocks.NewMockProvider(ctrl)
+		provider.EXPECT().Service(gomock.Any()).Return(service, nil)
+		provider.EXPECT().ConnectionLookup().Return(rec.Lookup).AnyTimes()
 
 		cmd, err := New(provider, mocknotifier.NewMockNotifier(nil))
 		require.NoError(t, err)
@@ -260,12 +354,7 @@ func TestCommand_SendProposal(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	service := mocks.NewMockProtocolService(ctrl)
-	service.EXPECT().RegisterActionEvent(gomock.Any()).Return(nil).AnyTimes()
-	service.EXPECT().RegisterMsgEvent(gomock.Any()).Return(nil).AnyTimes()
-
-	provider := mocks.NewMockProvider(ctrl)
-	provider.EXPECT().Service(gomock.Any()).Return(service, nil).AnyTimes()
+	provider := mockProvider(ctrl, nil)
 
 	t.Run("Decode error", func(t *testing.T) {
 		cmd, err := New(provider, mocknotifier.NewMockNotifier(nil))
@@ -322,8 +411,26 @@ func TestCommand_SendProposal(t *testing.T) {
 		require.Equal(t, command.ValidationError, cmdErr.Type())
 	})
 
+	t.Run("Missing connection", func(t *testing.T) {
+		rec := mockConnectionRecorder(t)
+		provider := mockProvider(ctrl, rec.Lookup)
+
+		cmd, err := New(provider, mocknotifier.NewMockNotifier(nil))
+		require.NoError(t, err)
+		require.NotNil(t, cmd)
+
+		var b bytes.Buffer
+		const jsonPayload = `{"my_did":"id","their_did":"id","propose_credential":{}}`
+		cmdErr := cmd.SendProposal(&b, bytes.NewBufferString(jsonPayload))
+
+		require.Error(t, cmdErr)
+		require.Contains(t, cmdErr.Error(), errMissingConnection)
+		require.Equal(t, InvalidRequestErrorCode, cmdErr.Code())
+		require.Equal(t, command.ValidationError, cmdErr.Type())
+	})
+
 	t.Run("SendProposal (error)", func(t *testing.T) {
-		service := mocks.NewMockProtocolService(ctrl)
+		service := clientmocks.NewMockProtocolService(ctrl)
 		service.EXPECT().RegisterActionEvent(gomock.Any()).Return(nil)
 		service.EXPECT().RegisterMsgEvent(gomock.Any()).Return(nil)
 		service.EXPECT().HandleOutbound(
@@ -331,8 +438,14 @@ func TestCommand_SendProposal(t *testing.T) {
 			gomock.Any(),
 		).Return("", errors.New("some error message"))
 
+		rec := mockConnectionRecorder(t, connection.Record{
+			MyDID:    "id",
+			TheirDID: "id",
+		})
+
 		provider := mocks.NewMockProvider(ctrl)
 		provider.EXPECT().Service(gomock.Any()).Return(service, nil)
+		provider.EXPECT().ConnectionLookup().Return(rec.Lookup).AnyTimes()
 
 		cmd, err := New(provider, mocknotifier.NewMockNotifier(nil))
 		require.NoError(t, err)
@@ -349,13 +462,77 @@ func TestCommand_SendProposal(t *testing.T) {
 	})
 
 	t.Run("Success", func(t *testing.T) {
-		service := mocks.NewMockProtocolService(ctrl)
+		service := clientmocks.NewMockProtocolService(ctrl)
 		service.EXPECT().RegisterActionEvent(gomock.Any()).Return(nil)
 		service.EXPECT().RegisterMsgEvent(gomock.Any()).Return(nil)
 		service.EXPECT().HandleOutbound(gomock.Any(), gomock.Any(), gomock.Any())
 
+		rec := mockConnectionRecorder(t, connection.Record{
+			MyDID:    "id",
+			TheirDID: "id",
+		})
+
 		provider := mocks.NewMockProvider(ctrl)
 		provider.EXPECT().Service(gomock.Any()).Return(service, nil)
+		provider.EXPECT().ConnectionLookup().Return(rec.Lookup).AnyTimes()
+
+		cmd, err := New(provider, mocknotifier.NewMockNotifier(nil))
+		require.NoError(t, err)
+		require.NotNil(t, cmd)
+
+		var b bytes.Buffer
+		const jsonPayload = `{"my_did":"id","their_did":"id","propose_credential":{}}`
+		require.NoError(t, cmd.SendProposal(&b, bytes.NewBufferString(jsonPayload)))
+	})
+
+	t.Run("SendProposal (error) v3", func(t *testing.T) {
+		service := clientmocks.NewMockProtocolService(ctrl)
+		service.EXPECT().RegisterActionEvent(gomock.Any()).Return(nil)
+		service.EXPECT().RegisterMsgEvent(gomock.Any()).Return(nil)
+		service.EXPECT().HandleOutbound(
+			gomock.Any(), gomock.Any(),
+			gomock.Any(),
+		).Return("", errors.New("some error message"))
+
+		rec := mockConnectionRecorder(t, connection.Record{
+			MyDID:          "id",
+			TheirDID:       "id",
+			DIDCommVersion: didcomm.V2,
+		})
+
+		provider := mocks.NewMockProvider(ctrl)
+		provider.EXPECT().Service(gomock.Any()).Return(service, nil)
+		provider.EXPECT().ConnectionLookup().Return(rec.Lookup).AnyTimes()
+
+		cmd, err := New(provider, mocknotifier.NewMockNotifier(nil))
+		require.NoError(t, err)
+		require.NotNil(t, cmd)
+
+		var b bytes.Buffer
+		const jsonPayload = `{"my_did":"id","their_did":"id","propose_credential":{}}`
+		cmdErr := cmd.SendProposal(&b, bytes.NewBufferString(jsonPayload))
+
+		require.Error(t, cmdErr)
+		require.Contains(t, cmdErr.Error(), "some error message")
+		require.Equal(t, SendProposalErrorCode, cmdErr.Code())
+		require.Equal(t, command.ExecuteError, cmdErr.Type())
+	})
+
+	t.Run("Success v3", func(t *testing.T) {
+		service := clientmocks.NewMockProtocolService(ctrl)
+		service.EXPECT().RegisterActionEvent(gomock.Any()).Return(nil)
+		service.EXPECT().RegisterMsgEvent(gomock.Any()).Return(nil)
+		service.EXPECT().HandleOutbound(gomock.Any(), gomock.Any(), gomock.Any())
+
+		rec := mockConnectionRecorder(t, connection.Record{
+			MyDID:          "id",
+			TheirDID:       "id",
+			DIDCommVersion: didcomm.V2,
+		})
+
+		provider := mocks.NewMockProvider(ctrl)
+		provider.EXPECT().Service(gomock.Any()).Return(service, nil)
+		provider.EXPECT().ConnectionLookup().Return(rec.Lookup).AnyTimes()
 
 		cmd, err := New(provider, mocknotifier.NewMockNotifier(nil))
 		require.NoError(t, err)
@@ -371,12 +548,7 @@ func TestCommand_SendRequest(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	service := mocks.NewMockProtocolService(ctrl)
-	service.EXPECT().RegisterActionEvent(gomock.Any()).Return(nil).AnyTimes()
-	service.EXPECT().RegisterMsgEvent(gomock.Any()).Return(nil).AnyTimes()
-
-	provider := mocks.NewMockProvider(ctrl)
-	provider.EXPECT().Service(gomock.Any()).Return(service, nil).AnyTimes()
+	provider := mockProvider(ctrl, nil)
 
 	t.Run("Decode error", func(t *testing.T) {
 		cmd, err := New(provider, mocknotifier.NewMockNotifier(nil))
@@ -433,8 +605,26 @@ func TestCommand_SendRequest(t *testing.T) {
 		require.Equal(t, command.ValidationError, cmdErr.Type())
 	})
 
+	t.Run("Missing connection", func(t *testing.T) {
+		rec := mockConnectionRecorder(t)
+		provider := mockProvider(ctrl, rec.Lookup)
+
+		cmd, err := New(provider, mocknotifier.NewMockNotifier(nil))
+		require.NoError(t, err)
+		require.NotNil(t, cmd)
+
+		var b bytes.Buffer
+		const jsonPayload = `{"my_did":"id","their_did":"id","request_credential":{}}`
+		cmdErr := cmd.SendRequest(&b, bytes.NewBufferString(jsonPayload))
+
+		require.Error(t, cmdErr)
+		require.Contains(t, cmdErr.Error(), errMissingConnection)
+		require.Equal(t, InvalidRequestErrorCode, cmdErr.Code())
+		require.Equal(t, command.ValidationError, cmdErr.Type())
+	})
+
 	t.Run("SendRequest (error)", func(t *testing.T) {
-		service := mocks.NewMockProtocolService(ctrl)
+		service := clientmocks.NewMockProtocolService(ctrl)
 		service.EXPECT().RegisterActionEvent(gomock.Any()).Return(nil)
 		service.EXPECT().RegisterMsgEvent(gomock.Any()).Return(nil)
 		service.EXPECT().HandleOutbound(
@@ -442,8 +632,14 @@ func TestCommand_SendRequest(t *testing.T) {
 			gomock.Any(),
 		).Return("", errors.New("some error message"))
 
+		rec := mockConnectionRecorder(t, connection.Record{
+			MyDID:    "id",
+			TheirDID: "id",
+		})
+
 		provider := mocks.NewMockProvider(ctrl)
 		provider.EXPECT().Service(gomock.Any()).Return(service, nil)
+		provider.EXPECT().ConnectionLookup().Return(rec.Lookup).AnyTimes()
 
 		cmd, err := New(provider, mocknotifier.NewMockNotifier(nil))
 		require.NoError(t, err)
@@ -460,13 +656,77 @@ func TestCommand_SendRequest(t *testing.T) {
 	})
 
 	t.Run("Success", func(t *testing.T) {
-		service := mocks.NewMockProtocolService(ctrl)
+		service := clientmocks.NewMockProtocolService(ctrl)
 		service.EXPECT().RegisterActionEvent(gomock.Any()).Return(nil)
 		service.EXPECT().RegisterMsgEvent(gomock.Any()).Return(nil)
 		service.EXPECT().HandleOutbound(gomock.Any(), gomock.Any(), gomock.Any())
 
+		rec := mockConnectionRecorder(t, connection.Record{
+			MyDID:    "id",
+			TheirDID: "id",
+		})
+
 		provider := mocks.NewMockProvider(ctrl)
 		provider.EXPECT().Service(gomock.Any()).Return(service, nil)
+		provider.EXPECT().ConnectionLookup().Return(rec.Lookup).AnyTimes()
+
+		cmd, err := New(provider, mocknotifier.NewMockNotifier(nil))
+		require.NoError(t, err)
+		require.NotNil(t, cmd)
+
+		var b bytes.Buffer
+		const jsonPayload = `{"my_did":"id","their_did":"id","request_credential":{}}`
+		require.NoError(t, cmd.SendRequest(&b, bytes.NewBufferString(jsonPayload)))
+	})
+
+	t.Run("SendRequest (error) v3", func(t *testing.T) {
+		service := clientmocks.NewMockProtocolService(ctrl)
+		service.EXPECT().RegisterActionEvent(gomock.Any()).Return(nil)
+		service.EXPECT().RegisterMsgEvent(gomock.Any()).Return(nil)
+		service.EXPECT().HandleOutbound(
+			gomock.Any(), gomock.Any(),
+			gomock.Any(),
+		).Return("", errors.New("some error message"))
+
+		rec := mockConnectionRecorder(t, connection.Record{
+			MyDID:          "id",
+			TheirDID:       "id",
+			DIDCommVersion: didcomm.V2,
+		})
+
+		provider := mocks.NewMockProvider(ctrl)
+		provider.EXPECT().Service(gomock.Any()).Return(service, nil)
+		provider.EXPECT().ConnectionLookup().Return(rec.Lookup).AnyTimes()
+
+		cmd, err := New(provider, mocknotifier.NewMockNotifier(nil))
+		require.NoError(t, err)
+		require.NotNil(t, cmd)
+
+		var b bytes.Buffer
+		const jsonPayload = `{"my_did":"id","their_did":"id","request_credential":{}}`
+		cmdErr := cmd.SendRequest(&b, bytes.NewBufferString(jsonPayload))
+
+		require.Error(t, cmdErr)
+		require.Contains(t, cmdErr.Error(), "some error message")
+		require.Equal(t, SendRequestErrorCode, cmdErr.Code())
+		require.Equal(t, command.ExecuteError, cmdErr.Type())
+	})
+
+	t.Run("Success v3", func(t *testing.T) {
+		service := clientmocks.NewMockProtocolService(ctrl)
+		service.EXPECT().RegisterActionEvent(gomock.Any()).Return(nil)
+		service.EXPECT().RegisterMsgEvent(gomock.Any()).Return(nil)
+		service.EXPECT().HandleOutbound(gomock.Any(), gomock.Any(), gomock.Any())
+
+		rec := mockConnectionRecorder(t, connection.Record{
+			MyDID:          "id",
+			TheirDID:       "id",
+			DIDCommVersion: didcomm.V2,
+		})
+
+		provider := mocks.NewMockProvider(ctrl)
+		provider.EXPECT().Service(gomock.Any()).Return(service, nil)
+		provider.EXPECT().ConnectionLookup().Return(rec.Lookup).AnyTimes()
 
 		cmd, err := New(provider, mocknotifier.NewMockNotifier(nil))
 		require.NoError(t, err)
@@ -482,12 +742,7 @@ func TestCommand_AcceptProposal(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	service := mocks.NewMockProtocolService(ctrl)
-	service.EXPECT().RegisterActionEvent(gomock.Any()).Return(nil).AnyTimes()
-	service.EXPECT().RegisterMsgEvent(gomock.Any()).Return(nil).AnyTimes()
-
-	provider := mocks.NewMockProvider(ctrl)
-	provider.EXPECT().Service(gomock.Any()).Return(service, nil).AnyTimes()
+	provider := mockProvider(ctrl, nil)
 
 	t.Run("Decode error", func(t *testing.T) {
 		cmd, err := New(provider, mocknotifier.NewMockNotifier(nil))
@@ -531,13 +786,14 @@ func TestCommand_AcceptProposal(t *testing.T) {
 	})
 
 	t.Run("AcceptProposal (error)", func(t *testing.T) {
-		service := mocks.NewMockProtocolService(ctrl)
+		service := clientmocks.NewMockProtocolService(ctrl)
 		service.EXPECT().RegisterActionEvent(gomock.Any()).Return(nil)
 		service.EXPECT().RegisterMsgEvent(gomock.Any()).Return(nil)
 		service.EXPECT().ActionContinue(gomock.Any(), gomock.Any()).Return(errors.New("some error message"))
 
 		provider := mocks.NewMockProvider(ctrl)
 		provider.EXPECT().Service(gomock.Any()).Return(service, nil)
+		provider.EXPECT().ConnectionLookup().Return(nil).AnyTimes()
 
 		cmd, err := New(provider, mocknotifier.NewMockNotifier(nil))
 		require.NoError(t, err)
@@ -554,13 +810,14 @@ func TestCommand_AcceptProposal(t *testing.T) {
 	})
 
 	t.Run("Success", func(t *testing.T) {
-		service := mocks.NewMockProtocolService(ctrl)
+		service := clientmocks.NewMockProtocolService(ctrl)
 		service.EXPECT().RegisterActionEvent(gomock.Any()).Return(nil)
 		service.EXPECT().RegisterMsgEvent(gomock.Any()).Return(nil)
 		service.EXPECT().ActionContinue(gomock.Any(), gomock.Any())
 
 		provider := mocks.NewMockProvider(ctrl)
 		provider.EXPECT().Service(gomock.Any()).Return(service, nil)
+		provider.EXPECT().ConnectionLookup().Return(nil).AnyTimes()
 
 		cmd, err := New(provider, mocknotifier.NewMockNotifier(nil))
 		require.NoError(t, err)
@@ -576,12 +833,7 @@ func TestCommand_NegotiateProposal(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	service := mocks.NewMockProtocolService(ctrl)
-	service.EXPECT().RegisterActionEvent(gomock.Any()).Return(nil).AnyTimes()
-	service.EXPECT().RegisterMsgEvent(gomock.Any()).Return(nil).AnyTimes()
-
-	provider := mocks.NewMockProvider(ctrl)
-	provider.EXPECT().Service(gomock.Any()).Return(service, nil).AnyTimes()
+	provider := mockProvider(ctrl, nil)
 
 	t.Run("Decode error", func(t *testing.T) {
 		cmd, err := New(provider, mocknotifier.NewMockNotifier(nil))
@@ -625,13 +877,14 @@ func TestCommand_NegotiateProposal(t *testing.T) {
 	})
 
 	t.Run("NegotiateProposal (error)", func(t *testing.T) {
-		service := mocks.NewMockProtocolService(ctrl)
+		service := clientmocks.NewMockProtocolService(ctrl)
 		service.EXPECT().RegisterActionEvent(gomock.Any()).Return(nil)
 		service.EXPECT().RegisterMsgEvent(gomock.Any()).Return(nil)
 		service.EXPECT().ActionContinue(gomock.Any(), gomock.Any()).Return(errors.New("some error message"))
 
 		provider := mocks.NewMockProvider(ctrl)
 		provider.EXPECT().Service(gomock.Any()).Return(service, nil)
+		provider.EXPECT().ConnectionLookup().Return(nil).AnyTimes()
 
 		cmd, err := New(provider, mocknotifier.NewMockNotifier(nil))
 		require.NoError(t, err)
@@ -648,13 +901,14 @@ func TestCommand_NegotiateProposal(t *testing.T) {
 	})
 
 	t.Run("Success", func(t *testing.T) {
-		service := mocks.NewMockProtocolService(ctrl)
+		service := clientmocks.NewMockProtocolService(ctrl)
 		service.EXPECT().RegisterActionEvent(gomock.Any()).Return(nil)
 		service.EXPECT().RegisterMsgEvent(gomock.Any()).Return(nil)
 		service.EXPECT().ActionContinue(gomock.Any(), gomock.Any())
 
 		provider := mocks.NewMockProvider(ctrl)
 		provider.EXPECT().Service(gomock.Any()).Return(service, nil)
+		provider.EXPECT().ConnectionLookup().Return(nil).AnyTimes()
 
 		cmd, err := New(provider, mocknotifier.NewMockNotifier(nil))
 		require.NoError(t, err)
@@ -670,12 +924,7 @@ func TestCommand_DeclineProposal(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	service := mocks.NewMockProtocolService(ctrl)
-	service.EXPECT().RegisterActionEvent(gomock.Any()).Return(nil).AnyTimes()
-	service.EXPECT().RegisterMsgEvent(gomock.Any()).Return(nil).AnyTimes()
-
-	provider := mocks.NewMockProvider(ctrl)
-	provider.EXPECT().Service(gomock.Any()).Return(service, nil).AnyTimes()
+	provider := mockProvider(ctrl, nil)
 
 	t.Run("Decode error", func(t *testing.T) {
 		cmd, err := New(provider, mocknotifier.NewMockNotifier(nil))
@@ -705,13 +954,14 @@ func TestCommand_DeclineProposal(t *testing.T) {
 	})
 
 	t.Run("DeclineProposal (error)", func(t *testing.T) {
-		service := mocks.NewMockProtocolService(ctrl)
+		service := clientmocks.NewMockProtocolService(ctrl)
 		service.EXPECT().RegisterActionEvent(gomock.Any()).Return(nil)
 		service.EXPECT().RegisterMsgEvent(gomock.Any()).Return(nil)
-		service.EXPECT().ActionStop(gomock.Any(), gomock.Any()).Return(errors.New("some error message"))
+		service.EXPECT().ActionStop(gomock.Any(), gomock.Any(), gomock.Any()).Return(errors.New("some error message"))
 
 		provider := mocks.NewMockProvider(ctrl)
 		provider.EXPECT().Service(gomock.Any()).Return(service, nil)
+		provider.EXPECT().ConnectionLookup().Return(nil).AnyTimes()
 
 		cmd, err := New(provider, mocknotifier.NewMockNotifier(nil))
 		require.NoError(t, err)
@@ -727,13 +977,14 @@ func TestCommand_DeclineProposal(t *testing.T) {
 	})
 
 	t.Run("Success", func(t *testing.T) {
-		service := mocks.NewMockProtocolService(ctrl)
+		service := clientmocks.NewMockProtocolService(ctrl)
 		service.EXPECT().RegisterActionEvent(gomock.Any()).Return(nil)
 		service.EXPECT().RegisterMsgEvent(gomock.Any()).Return(nil)
-		service.EXPECT().ActionStop(gomock.Any(), gomock.Any())
+		service.EXPECT().ActionStop(gomock.Any(), gomock.Any(), gomock.Any())
 
 		provider := mocks.NewMockProvider(ctrl)
 		provider.EXPECT().Service(gomock.Any()).Return(service, nil)
+		provider.EXPECT().ConnectionLookup().Return(nil).AnyTimes()
 
 		cmd, err := New(provider, mocknotifier.NewMockNotifier(nil))
 		require.NoError(t, err)
@@ -748,12 +999,7 @@ func TestCommand_AcceptOffer(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	service := mocks.NewMockProtocolService(ctrl)
-	service.EXPECT().RegisterActionEvent(gomock.Any()).Return(nil).AnyTimes()
-	service.EXPECT().RegisterMsgEvent(gomock.Any()).Return(nil).AnyTimes()
-
-	provider := mocks.NewMockProvider(ctrl)
-	provider.EXPECT().Service(gomock.Any()).Return(service, nil).AnyTimes()
+	provider := mockProvider(ctrl, nil)
 
 	t.Run("Decode error", func(t *testing.T) {
 		cmd, err := New(provider, mocknotifier.NewMockNotifier(nil))
@@ -783,13 +1029,14 @@ func TestCommand_AcceptOffer(t *testing.T) {
 	})
 
 	t.Run("AcceptOffer (error)", func(t *testing.T) {
-		service := mocks.NewMockProtocolService(ctrl)
+		service := clientmocks.NewMockProtocolService(ctrl)
 		service.EXPECT().RegisterActionEvent(gomock.Any()).Return(nil)
 		service.EXPECT().RegisterMsgEvent(gomock.Any()).Return(nil)
 		service.EXPECT().ActionContinue(gomock.Any(), gomock.Any()).Return(errors.New("some error message"))
 
 		provider := mocks.NewMockProvider(ctrl)
 		provider.EXPECT().Service(gomock.Any()).Return(service, nil)
+		provider.EXPECT().ConnectionLookup().Return(nil).AnyTimes()
 
 		cmd, err := New(provider, mocknotifier.NewMockNotifier(nil))
 		require.NoError(t, err)
@@ -805,13 +1052,14 @@ func TestCommand_AcceptOffer(t *testing.T) {
 	})
 
 	t.Run("Success", func(t *testing.T) {
-		service := mocks.NewMockProtocolService(ctrl)
+		service := clientmocks.NewMockProtocolService(ctrl)
 		service.EXPECT().RegisterActionEvent(gomock.Any()).Return(nil)
 		service.EXPECT().RegisterMsgEvent(gomock.Any()).Return(nil)
 		service.EXPECT().ActionContinue(gomock.Any(), gomock.Any())
 
 		provider := mocks.NewMockProvider(ctrl)
 		provider.EXPECT().Service(gomock.Any()).Return(service, nil)
+		provider.EXPECT().ConnectionLookup().Return(nil).AnyTimes()
 
 		cmd, err := New(provider, mocknotifier.NewMockNotifier(nil))
 		require.NoError(t, err)
@@ -826,12 +1074,7 @@ func TestCommand_AcceptProblemReport(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	service := mocks.NewMockProtocolService(ctrl)
-	service.EXPECT().RegisterActionEvent(gomock.Any()).Return(nil).AnyTimes()
-	service.EXPECT().RegisterMsgEvent(gomock.Any()).Return(nil).AnyTimes()
-
-	provider := mocks.NewMockProvider(ctrl)
-	provider.EXPECT().Service(gomock.Any()).Return(service, nil).AnyTimes()
+	provider := mockProvider(ctrl, nil)
 
 	t.Run("Decode error", func(t *testing.T) {
 		cmd, err := New(provider, mocknotifier.NewMockNotifier(nil))
@@ -861,13 +1104,14 @@ func TestCommand_AcceptProblemReport(t *testing.T) {
 	})
 
 	t.Run("AcceptProblemReport (error)", func(t *testing.T) {
-		service := mocks.NewMockProtocolService(ctrl)
+		service := clientmocks.NewMockProtocolService(ctrl)
 		service.EXPECT().RegisterActionEvent(gomock.Any()).Return(nil)
 		service.EXPECT().RegisterMsgEvent(gomock.Any()).Return(nil)
 		service.EXPECT().ActionContinue(gomock.Any(), gomock.Any()).Return(errors.New("some error message"))
 
 		provider := mocks.NewMockProvider(ctrl)
 		provider.EXPECT().Service(gomock.Any()).Return(service, nil)
+		provider.EXPECT().ConnectionLookup().Return(nil).AnyTimes()
 
 		cmd, err := New(provider, mocknotifier.NewMockNotifier(nil))
 		require.NoError(t, err)
@@ -883,13 +1127,14 @@ func TestCommand_AcceptProblemReport(t *testing.T) {
 	})
 
 	t.Run("Success", func(t *testing.T) {
-		service := mocks.NewMockProtocolService(ctrl)
+		service := clientmocks.NewMockProtocolService(ctrl)
 		service.EXPECT().RegisterActionEvent(gomock.Any()).Return(nil)
 		service.EXPECT().RegisterMsgEvent(gomock.Any()).Return(nil)
 		service.EXPECT().ActionContinue(gomock.Any(), gomock.Any())
 
 		provider := mocks.NewMockProvider(ctrl)
 		provider.EXPECT().Service(gomock.Any()).Return(service, nil)
+		provider.EXPECT().ConnectionLookup().Return(nil).AnyTimes()
 
 		cmd, err := New(provider, mocknotifier.NewMockNotifier(nil))
 		require.NoError(t, err)
@@ -904,12 +1149,7 @@ func TestCommand_DeclineOffer(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	service := mocks.NewMockProtocolService(ctrl)
-	service.EXPECT().RegisterActionEvent(gomock.Any()).Return(nil).AnyTimes()
-	service.EXPECT().RegisterMsgEvent(gomock.Any()).Return(nil).AnyTimes()
-
-	provider := mocks.NewMockProvider(ctrl)
-	provider.EXPECT().Service(gomock.Any()).Return(service, nil).AnyTimes()
+	provider := mockProvider(ctrl, nil)
 
 	t.Run("Decode error", func(t *testing.T) {
 		cmd, err := New(provider, mocknotifier.NewMockNotifier(nil))
@@ -939,13 +1179,14 @@ func TestCommand_DeclineOffer(t *testing.T) {
 	})
 
 	t.Run("DeclineOffer (error)", func(t *testing.T) {
-		service := mocks.NewMockProtocolService(ctrl)
+		service := clientmocks.NewMockProtocolService(ctrl)
 		service.EXPECT().RegisterActionEvent(gomock.Any()).Return(nil)
 		service.EXPECT().RegisterMsgEvent(gomock.Any()).Return(nil)
 		service.EXPECT().ActionStop(gomock.Any(), gomock.Any()).Return(errors.New("some error message"))
 
 		provider := mocks.NewMockProvider(ctrl)
 		provider.EXPECT().Service(gomock.Any()).Return(service, nil)
+		provider.EXPECT().ConnectionLookup().Return(nil).AnyTimes()
 
 		cmd, err := New(provider, mocknotifier.NewMockNotifier(nil))
 		require.NoError(t, err)
@@ -961,13 +1202,14 @@ func TestCommand_DeclineOffer(t *testing.T) {
 	})
 
 	t.Run("Success", func(t *testing.T) {
-		service := mocks.NewMockProtocolService(ctrl)
+		service := clientmocks.NewMockProtocolService(ctrl)
 		service.EXPECT().RegisterActionEvent(gomock.Any()).Return(nil)
 		service.EXPECT().RegisterMsgEvent(gomock.Any()).Return(nil)
 		service.EXPECT().ActionStop(gomock.Any(), gomock.Any())
 
 		provider := mocks.NewMockProvider(ctrl)
 		provider.EXPECT().Service(gomock.Any()).Return(service, nil)
+		provider.EXPECT().ConnectionLookup().Return(nil).AnyTimes()
 
 		cmd, err := New(provider, mocknotifier.NewMockNotifier(nil))
 		require.NoError(t, err)
@@ -982,12 +1224,7 @@ func TestCommand_AcceptRequest(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	service := mocks.NewMockProtocolService(ctrl)
-	service.EXPECT().RegisterActionEvent(gomock.Any()).Return(nil).AnyTimes()
-	service.EXPECT().RegisterMsgEvent(gomock.Any()).Return(nil).AnyTimes()
-
-	provider := mocks.NewMockProvider(ctrl)
-	provider.EXPECT().Service(gomock.Any()).Return(service, nil).AnyTimes()
+	provider := mockProvider(ctrl, nil)
 
 	t.Run("Decode error", func(t *testing.T) {
 		cmd, err := New(provider, mocknotifier.NewMockNotifier(nil))
@@ -1031,13 +1268,14 @@ func TestCommand_AcceptRequest(t *testing.T) {
 	})
 
 	t.Run("AcceptRequest (error)", func(t *testing.T) {
-		service := mocks.NewMockProtocolService(ctrl)
+		service := clientmocks.NewMockProtocolService(ctrl)
 		service.EXPECT().RegisterActionEvent(gomock.Any()).Return(nil)
 		service.EXPECT().RegisterMsgEvent(gomock.Any()).Return(nil)
 		service.EXPECT().ActionContinue(gomock.Any(), gomock.Any()).Return(errors.New("some error message"))
 
 		provider := mocks.NewMockProvider(ctrl)
 		provider.EXPECT().Service(gomock.Any()).Return(service, nil)
+		provider.EXPECT().ConnectionLookup().Return(nil).AnyTimes()
 
 		cmd, err := New(provider, mocknotifier.NewMockNotifier(nil))
 		require.NoError(t, err)
@@ -1054,13 +1292,14 @@ func TestCommand_AcceptRequest(t *testing.T) {
 	})
 
 	t.Run("Success", func(t *testing.T) {
-		service := mocks.NewMockProtocolService(ctrl)
+		service := clientmocks.NewMockProtocolService(ctrl)
 		service.EXPECT().RegisterActionEvent(gomock.Any()).Return(nil)
 		service.EXPECT().RegisterMsgEvent(gomock.Any()).Return(nil)
 		service.EXPECT().ActionContinue(gomock.Any(), gomock.Any())
 
 		provider := mocks.NewMockProvider(ctrl)
 		provider.EXPECT().Service(gomock.Any()).Return(service, nil)
+		provider.EXPECT().ConnectionLookup().Return(nil).AnyTimes()
 
 		cmd, err := New(provider, mocknotifier.NewMockNotifier(nil))
 		require.NoError(t, err)
@@ -1076,12 +1315,7 @@ func TestCommand_DeclineRequest(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	service := mocks.NewMockProtocolService(ctrl)
-	service.EXPECT().RegisterActionEvent(gomock.Any()).Return(nil).AnyTimes()
-	service.EXPECT().RegisterMsgEvent(gomock.Any()).Return(nil).AnyTimes()
-
-	provider := mocks.NewMockProvider(ctrl)
-	provider.EXPECT().Service(gomock.Any()).Return(service, nil).AnyTimes()
+	provider := mockProvider(ctrl, nil)
 
 	t.Run("Decode error", func(t *testing.T) {
 		cmd, err := New(provider, mocknotifier.NewMockNotifier(nil))
@@ -1111,13 +1345,14 @@ func TestCommand_DeclineRequest(t *testing.T) {
 	})
 
 	t.Run("DeclineRequest (error)", func(t *testing.T) {
-		service := mocks.NewMockProtocolService(ctrl)
+		service := clientmocks.NewMockProtocolService(ctrl)
 		service.EXPECT().RegisterActionEvent(gomock.Any()).Return(nil)
 		service.EXPECT().RegisterMsgEvent(gomock.Any()).Return(nil)
-		service.EXPECT().ActionStop(gomock.Any(), gomock.Any()).Return(errors.New("some error message"))
+		service.EXPECT().ActionStop(gomock.Any(), gomock.Any(), gomock.Any()).Return(errors.New("some error message"))
 
 		provider := mocks.NewMockProvider(ctrl)
 		provider.EXPECT().Service(gomock.Any()).Return(service, nil)
+		provider.EXPECT().ConnectionLookup().Return(nil).AnyTimes()
 
 		cmd, err := New(provider, mocknotifier.NewMockNotifier(nil))
 		require.NoError(t, err)
@@ -1133,13 +1368,14 @@ func TestCommand_DeclineRequest(t *testing.T) {
 	})
 
 	t.Run("Success", func(t *testing.T) {
-		service := mocks.NewMockProtocolService(ctrl)
+		service := clientmocks.NewMockProtocolService(ctrl)
 		service.EXPECT().RegisterActionEvent(gomock.Any()).Return(nil)
 		service.EXPECT().RegisterMsgEvent(gomock.Any()).Return(nil)
-		service.EXPECT().ActionStop(gomock.Any(), gomock.Any())
+		service.EXPECT().ActionStop(gomock.Any(), gomock.Any(), gomock.Any())
 
 		provider := mocks.NewMockProvider(ctrl)
 		provider.EXPECT().Service(gomock.Any()).Return(service, nil)
+		provider.EXPECT().ConnectionLookup().Return(nil).AnyTimes()
 
 		cmd, err := New(provider, mocknotifier.NewMockNotifier(nil))
 		require.NoError(t, err)
@@ -1154,12 +1390,7 @@ func TestCommand_AcceptCredential(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	service := mocks.NewMockProtocolService(ctrl)
-	service.EXPECT().RegisterActionEvent(gomock.Any()).Return(nil).AnyTimes()
-	service.EXPECT().RegisterMsgEvent(gomock.Any()).Return(nil).AnyTimes()
-
-	provider := mocks.NewMockProvider(ctrl)
-	provider.EXPECT().Service(gomock.Any()).Return(service, nil).AnyTimes()
+	provider := mockProvider(ctrl, nil)
 
 	t.Run("Decode error", func(t *testing.T) {
 		cmd, err := New(provider, mocknotifier.NewMockNotifier(nil))
@@ -1189,13 +1420,14 @@ func TestCommand_AcceptCredential(t *testing.T) {
 	})
 
 	t.Run("AcceptCredential (error)", func(t *testing.T) {
-		service := mocks.NewMockProtocolService(ctrl)
+		service := clientmocks.NewMockProtocolService(ctrl)
 		service.EXPECT().RegisterActionEvent(gomock.Any()).Return(nil)
 		service.EXPECT().RegisterMsgEvent(gomock.Any()).Return(nil)
 		service.EXPECT().ActionContinue(gomock.Any(), gomock.Any()).Return(errors.New("some error message"))
 
 		provider := mocks.NewMockProvider(ctrl)
 		provider.EXPECT().Service(gomock.Any()).Return(service, nil)
+		provider.EXPECT().ConnectionLookup().Return(nil).AnyTimes()
 
 		cmd, err := New(provider, mocknotifier.NewMockNotifier(nil))
 		require.NoError(t, err)
@@ -1211,13 +1443,14 @@ func TestCommand_AcceptCredential(t *testing.T) {
 	})
 
 	t.Run("Success", func(t *testing.T) {
-		service := mocks.NewMockProtocolService(ctrl)
+		service := clientmocks.NewMockProtocolService(ctrl)
 		service.EXPECT().RegisterActionEvent(gomock.Any()).Return(nil)
 		service.EXPECT().RegisterMsgEvent(gomock.Any()).Return(nil)
 		service.EXPECT().ActionContinue(gomock.Any(), gomock.Any())
 
 		provider := mocks.NewMockProvider(ctrl)
 		provider.EXPECT().Service(gomock.Any()).Return(service, nil)
+		provider.EXPECT().ConnectionLookup().Return(nil).AnyTimes()
 
 		cmd, err := New(provider, mocknotifier.NewMockNotifier(nil))
 		require.NoError(t, err)
@@ -1232,12 +1465,7 @@ func TestCommand_DeclineCredential(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	service := mocks.NewMockProtocolService(ctrl)
-	service.EXPECT().RegisterActionEvent(gomock.Any()).Return(nil).AnyTimes()
-	service.EXPECT().RegisterMsgEvent(gomock.Any()).Return(nil).AnyTimes()
-
-	provider := mocks.NewMockProvider(ctrl)
-	provider.EXPECT().Service(gomock.Any()).Return(service, nil).AnyTimes()
+	provider := mockProvider(ctrl, nil)
 
 	t.Run("Decode error", func(t *testing.T) {
 		cmd, err := New(provider, mocknotifier.NewMockNotifier(nil))
@@ -1267,13 +1495,14 @@ func TestCommand_DeclineCredential(t *testing.T) {
 	})
 
 	t.Run("DeclineCredential (error)", func(t *testing.T) {
-		service := mocks.NewMockProtocolService(ctrl)
+		service := clientmocks.NewMockProtocolService(ctrl)
 		service.EXPECT().RegisterActionEvent(gomock.Any()).Return(nil)
 		service.EXPECT().RegisterMsgEvent(gomock.Any()).Return(nil)
 		service.EXPECT().ActionStop(gomock.Any(), gomock.Any()).Return(errors.New("some error message"))
 
 		provider := mocks.NewMockProvider(ctrl)
 		provider.EXPECT().Service(gomock.Any()).Return(service, nil)
+		provider.EXPECT().ConnectionLookup().Return(nil).AnyTimes()
 
 		cmd, err := New(provider, mocknotifier.NewMockNotifier(nil))
 		require.NoError(t, err)
@@ -1289,13 +1518,14 @@ func TestCommand_DeclineCredential(t *testing.T) {
 	})
 
 	t.Run("Success", func(t *testing.T) {
-		service := mocks.NewMockProtocolService(ctrl)
+		service := clientmocks.NewMockProtocolService(ctrl)
 		service.EXPECT().RegisterActionEvent(gomock.Any()).Return(nil)
 		service.EXPECT().RegisterMsgEvent(gomock.Any()).Return(nil)
 		service.EXPECT().ActionStop(gomock.Any(), gomock.Any())
 
 		provider := mocks.NewMockProvider(ctrl)
 		provider.EXPECT().Service(gomock.Any()).Return(service, nil)
+		provider.EXPECT().ConnectionLookup().Return(nil).AnyTimes()
 
 		cmd, err := New(provider, mocknotifier.NewMockNotifier(nil))
 		require.NoError(t, err)
@@ -1367,12 +1597,55 @@ func (m *mockProtocol) Actions() ([]protocol.Action, error) {
 	panic("implement me")
 }
 
-func (m *mockProtocol) ActionContinue(string, protocol.Opt) error {
+func (m *mockProtocol) ActionContinue(string, ...protocol.Opt) error {
 	panic("implement me")
 }
 
-func (m *mockProtocol) ActionStop(string, error) error {
+func (m *mockProtocol) ActionStop(string, error, ...protocol.Opt) error {
 	panic("implement me")
 }
 
 func (m *mockProtocol) AddMiddleware(...protocol.Middleware) {}
+
+func mockProvider(ctrl *gomock.Controller, lookup *connection.Lookup) *mocks.MockProvider {
+	service := clientmocks.NewMockProtocolService(ctrl)
+	service.EXPECT().RegisterActionEvent(gomock.Any()).Return(nil).AnyTimes()
+	service.EXPECT().RegisterMsgEvent(gomock.Any()).Return(nil).AnyTimes()
+
+	provider := mocks.NewMockProvider(ctrl)
+	provider.EXPECT().Service(gomock.Any()).Return(service, nil).AnyTimes()
+	provider.EXPECT().ConnectionLookup().Return(lookup).AnyTimes()
+
+	return provider
+}
+
+func mockConnectionRecorder(t *testing.T, records ...connection.Record) *connection.Recorder {
+	t.Helper()
+
+	storeProv := mockstore.NewMockStoreProvider()
+
+	prov := mockprovider.Provider{
+		StorageProviderValue:              storeProv,
+		ProtocolStateStorageProviderValue: storeProv,
+	}
+
+	recorder, err := connection.NewRecorder(&prov)
+	require.NoError(t, err)
+
+	for i := 0; i < len(records); i++ {
+		rec := records[i]
+
+		if rec.ConnectionID == "" {
+			rec.ConnectionID = uuid.New().String()
+		}
+
+		if rec.State == "" {
+			rec.State = connection.StateNameCompleted
+		}
+
+		err = recorder.SaveConnectionRecord(&rec)
+		require.NoError(t, err)
+	}
+
+	return recorder
+}

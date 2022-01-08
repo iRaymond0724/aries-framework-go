@@ -279,6 +279,39 @@ func TestConnectionStore_GetInvitation(t *testing.T) {
 	})
 }
 
+func TestConnectionStore_SaveAndGetOOBv2Invitation(t *testing.T) {
+	t.Run("success", func(t *testing.T) {
+		recorder, err := NewRecorder(&mockProvider{})
+		require.NoError(t, err)
+		require.NotNil(t, recorder)
+
+		mockDID := "did:test:abc:def"
+
+		valueStored := &mockInvitation{
+			ID:    "sample-id-3",
+			Label: "sample-label-3",
+		}
+
+		err = recorder.SaveOOBv2Invitation(mockDID, valueStored)
+		require.NoError(t, err)
+
+		var valueFound mockInvitation
+		err = recorder.GetOOBv2Invitation(mockDID, &valueFound)
+		require.NoError(t, err)
+		require.Equal(t, valueStored, &valueFound)
+	})
+
+	t.Run("fail: lookup without key", func(t *testing.T) {
+		recorder, err := NewRecorder(&mockProvider{})
+		require.NoError(t, err)
+		require.NotNil(t, recorder)
+
+		err = recorder.GetOOBv2Invitation("", nil)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), errMsgInvalidKey)
+	})
+}
+
 func TestConnectionStore_SaveAndGetEventData(t *testing.T) {
 	t.Run("test save and get event data - success", func(t *testing.T) {
 		recorder, err := NewRecorder(&mockProvider{})
@@ -503,8 +536,7 @@ func TestConnectionRecorder_RemoveConnection(t *testing.T) {
 			t.Errorf("protocol state store still has connection state records: key=%s", key)
 		}
 
-		var r3 Record
-		err = getAndUnmarshal(getDIDConnMapKeyPrefix()(record.MyDID, record.TheirDID), &r3, recorder.store)
+		_, err = recorder.GetConnectionRecordByDIDs(record.MyDID, record.TheirDID)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "data not found")
 	})

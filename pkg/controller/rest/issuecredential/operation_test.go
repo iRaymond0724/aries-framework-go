@@ -15,26 +15,31 @@ import (
 	"testing"
 
 	"github.com/golang/mock/gomock"
+	"github.com/google/uuid"
 	"github.com/gorilla/mux"
 	"github.com/piprate/json-gold/ld"
 	"github.com/stretchr/testify/require"
 
 	"github.com/hyperledger/aries-framework-go/component/storageutil/mem"
-	client "github.com/hyperledger/aries-framework-go/pkg/client/issuecredential"
+	command "github.com/hyperledger/aries-framework-go/pkg/controller/command/issuecredential"
 	"github.com/hyperledger/aries-framework-go/pkg/controller/rest"
 	"github.com/hyperledger/aries-framework-go/pkg/crypto"
 	"github.com/hyperledger/aries-framework-go/pkg/didcomm/common/service"
 	"github.com/hyperledger/aries-framework-go/pkg/didcomm/protocol/issuecredential"
 	vdrapi "github.com/hyperledger/aries-framework-go/pkg/framework/aries/api/vdr"
-	mocks "github.com/hyperledger/aries-framework-go/pkg/internal/gomocks/client/issuecredential"
+	mocks "github.com/hyperledger/aries-framework-go/pkg/internal/gomocks/controller/command/issuecredential"
 	mocknotifier "github.com/hyperledger/aries-framework-go/pkg/internal/gomocks/controller/webnotifier"
 	"github.com/hyperledger/aries-framework-go/pkg/kms"
+	mockprovider "github.com/hyperledger/aries-framework-go/pkg/mock/provider"
+	mockstore "github.com/hyperledger/aries-framework-go/pkg/mock/storage"
+	"github.com/hyperledger/aries-framework-go/pkg/store/connection"
 	"github.com/hyperledger/aries-framework-go/spi/storage"
 )
 
-func provider(ctrl *gomock.Controller) client.Provider {
+func provider(ctrl *gomock.Controller, lookup *connection.Lookup) command.Provider {
 	provider := mocks.NewMockProvider(ctrl)
 	provider.EXPECT().Service(gomock.Any()).Return(&mockService{}, nil).MaxTimes(2)
+	provider.EXPECT().ConnectionLookup().Return(lookup).AnyTimes()
 
 	return provider
 }
@@ -44,7 +49,7 @@ func TestOperation_AcceptProposal(t *testing.T) {
 	defer ctrl.Finish()
 
 	t.Run("No payload", func(t *testing.T) {
-		operation, err := New(provider(ctrl), mocknotifier.NewMockNotifier(nil), &mockRFC0593Provider{})
+		operation, err := New(provider(ctrl, nil), mocknotifier.NewMockNotifier(nil), &mockRFC0593Provider{})
 		require.NoError(t, err)
 
 		buf, code, err := sendRequestToHandler(
@@ -58,7 +63,7 @@ func TestOperation_AcceptProposal(t *testing.T) {
 	})
 
 	t.Run("Success", func(t *testing.T) {
-		operation, err := New(provider(ctrl), mocknotifier.NewMockNotifier(nil), &mockRFC0593Provider{})
+		operation, err := New(provider(ctrl, nil), mocknotifier.NewMockNotifier(nil), &mockRFC0593Provider{})
 		require.NoError(t, err)
 
 		_, code, err := sendRequestToHandler(
@@ -72,12 +77,195 @@ func TestOperation_AcceptProposal(t *testing.T) {
 	})
 }
 
+func TestOperation_SendRequest(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	t.Run("No payload", func(t *testing.T) {
+		operation, err := New(provider(ctrl, nil), mocknotifier.NewMockNotifier(nil), &mockRFC0593Provider{})
+		require.NoError(t, err)
+
+		buf, code, err := sendRequestToHandler(
+			handlerLookup(t, operation, SendRequest), nil,
+			strings.Replace(SendRequest, `{piid}`, "1234", 1),
+		)
+
+		require.NoError(t, err)
+		require.Equal(t, http.StatusBadRequest, code)
+		require.Contains(t, buf.String(), "payload was not provided")
+	})
+
+	t.Run("Success", func(t *testing.T) {
+		rec := mockConnectionRecorder(t, connection.Record{
+			MyDID:    "id",
+			TheirDID: "id",
+		})
+		operation, err := New(provider(ctrl, rec.Lookup), mocknotifier.NewMockNotifier(nil), &mockRFC0593Provider{})
+		require.NoError(t, err)
+
+		_, code, err := sendRequestToHandler(
+			handlerLookup(t, operation, SendRequest),
+			bytes.NewBufferString(`{"my_did":"id","their_did":"id","request_credential":{}}`),
+			strings.Replace(SendRequest, `{piid}`, "1234", 1),
+		)
+
+		require.NoError(t, err)
+		require.Equal(t, http.StatusOK, code)
+	})
+}
+
+func TestOperation_SendRequestV3(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	t.Run("No payload", func(t *testing.T) {
+		operation, err := New(provider(ctrl, nil), mocknotifier.NewMockNotifier(nil), &mockRFC0593Provider{})
+		require.NoError(t, err)
+
+		buf, code, err := sendRequestToHandler(
+			handlerLookup(t, operation, SendRequestV3), nil,
+			strings.Replace(SendRequestV3, `{piid}`, "1234", 1),
+		)
+
+		require.NoError(t, err)
+		require.Equal(t, http.StatusBadRequest, code)
+		require.Contains(t, buf.String(), "payload was not provided")
+	})
+
+	t.Run("Success", func(t *testing.T) {
+		rec := mockConnectionRecorder(t, connection.Record{
+			MyDID:          "id",
+			TheirDID:       "id",
+			DIDCommVersion: service.V2,
+		})
+		operation, err := New(provider(ctrl, rec.Lookup), mocknotifier.NewMockNotifier(nil), &mockRFC0593Provider{})
+		require.NoError(t, err)
+
+		_, code, err := sendRequestToHandler(
+			handlerLookup(t, operation, SendRequestV3),
+			bytes.NewBufferString(`{"my_did":"id","their_did":"id","request_credential":{}}`),
+			strings.Replace(SendRequestV3, `{piid}`, "1234", 1),
+		)
+
+		require.NoError(t, err)
+		require.Equal(t, http.StatusOK, code)
+	})
+}
+
+func TestOperation_SendOffer(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	t.Run("No payload", func(t *testing.T) {
+		operation, err := New(provider(ctrl, nil), mocknotifier.NewMockNotifier(nil), &mockRFC0593Provider{})
+		require.NoError(t, err)
+
+		buf, code, err := sendRequestToHandler(
+			handlerLookup(t, operation, SendOffer), nil,
+			strings.Replace(SendOffer, `{piid}`, "1234", 1),
+		)
+
+		require.NoError(t, err)
+		require.Equal(t, http.StatusBadRequest, code)
+		require.Contains(t, buf.String(), "payload was not provided")
+	})
+
+	t.Run("Success", func(t *testing.T) {
+		rec := mockConnectionRecorder(t, connection.Record{
+			MyDID:    "id",
+			TheirDID: "id",
+		})
+		operation, err := New(provider(ctrl, rec.Lookup), mocknotifier.NewMockNotifier(nil), &mockRFC0593Provider{})
+		require.NoError(t, err)
+
+		_, code, err := sendRequestToHandler(
+			handlerLookup(t, operation, SendOffer),
+			bytes.NewBufferString(`{"my_did":"id","their_did":"id","offer_credential":{}}`),
+			strings.Replace(SendOffer, `{piid}`, "1234", 1),
+		)
+
+		require.NoError(t, err)
+		require.Equal(t, http.StatusOK, code)
+	})
+}
+
+func TestOperation_SendOfferV3(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	t.Run("No payload", func(t *testing.T) {
+		operation, err := New(provider(ctrl, nil), mocknotifier.NewMockNotifier(nil), &mockRFC0593Provider{})
+		require.NoError(t, err)
+
+		buf, code, err := sendRequestToHandler(
+			handlerLookup(t, operation, SendOfferV3), nil,
+			strings.Replace(SendOfferV3, `{piid}`, "1234", 1),
+		)
+
+		require.NoError(t, err)
+		require.Equal(t, http.StatusBadRequest, code)
+		require.Contains(t, buf.String(), "payload was not provided")
+	})
+
+	t.Run("Success", func(t *testing.T) {
+		rec := mockConnectionRecorder(t, connection.Record{
+			MyDID:          "id",
+			TheirDID:       "id",
+			DIDCommVersion: service.V2,
+		})
+		operation, err := New(provider(ctrl, rec.Lookup), mocknotifier.NewMockNotifier(nil), &mockRFC0593Provider{})
+		require.NoError(t, err)
+
+		_, code, err := sendRequestToHandler(
+			handlerLookup(t, operation, SendOfferV3),
+			bytes.NewBufferString(`{"my_did":"id","their_did":"id","offer_credential":{}}`),
+			strings.Replace(SendOfferV3, `{piid}`, "1234", 1),
+		)
+
+		require.NoError(t, err)
+		require.Equal(t, http.StatusOK, code)
+	})
+}
+
+func TestOperation_AcceptProposalV3(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	t.Run("No payload", func(t *testing.T) {
+		operation, err := New(provider(ctrl, nil), mocknotifier.NewMockNotifier(nil), &mockRFC0593Provider{})
+		require.NoError(t, err)
+
+		buf, code, err := sendRequestToHandler(
+			handlerLookup(t, operation, AcceptProposalV3), nil,
+			strings.Replace(AcceptProposalV3, `{piid}`, "1234", 1),
+		)
+
+		require.NoError(t, err)
+		require.Equal(t, http.StatusBadRequest, code)
+		require.Contains(t, buf.String(), "payload was not provided")
+	})
+
+	t.Run("Success", func(t *testing.T) {
+		operation, err := New(provider(ctrl, nil), mocknotifier.NewMockNotifier(nil), &mockRFC0593Provider{})
+		require.NoError(t, err)
+
+		_, code, err := sendRequestToHandler(
+			handlerLookup(t, operation, AcceptProposalV3),
+			bytes.NewBufferString(`{"offer_credential":{}}`),
+			strings.Replace(AcceptProposalV3, `{piid}`, "1234", 1),
+		)
+
+		require.NoError(t, err)
+		require.Equal(t, http.StatusOK, code)
+	})
+}
+
 func TestOperation_AcceptOffer(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
 	t.Run("Success", func(t *testing.T) {
-		operation, err := New(provider(ctrl), mocknotifier.NewMockNotifier(nil), &mockRFC0593Provider{})
+		operation, err := New(provider(ctrl, nil), mocknotifier.NewMockNotifier(nil), &mockRFC0593Provider{})
 		require.NoError(t, err)
 
 		_, code, err := sendRequestToHandler(
@@ -96,7 +284,7 @@ func TestOperation_AcceptProblemReport(t *testing.T) {
 	defer ctrl.Finish()
 
 	t.Run("Success", func(t *testing.T) {
-		operation, err := New(provider(ctrl), mocknotifier.NewMockNotifier(nil), &mockRFC0593Provider{})
+		operation, err := New(provider(ctrl, nil), mocknotifier.NewMockNotifier(nil), &mockRFC0593Provider{})
 		require.NoError(t, err)
 
 		_, code, err := sendRequestToHandler(
@@ -115,7 +303,7 @@ func TestOperation_AcceptRequest(t *testing.T) {
 	defer ctrl.Finish()
 
 	t.Run("No payload", func(t *testing.T) {
-		operation, err := New(provider(ctrl), mocknotifier.NewMockNotifier(nil), &mockRFC0593Provider{})
+		operation, err := New(provider(ctrl, nil), mocknotifier.NewMockNotifier(nil), &mockRFC0593Provider{})
 		require.NoError(t, err)
 
 		buf, code, err := sendRequestToHandler(
@@ -129,7 +317,7 @@ func TestOperation_AcceptRequest(t *testing.T) {
 	})
 
 	t.Run("Success", func(t *testing.T) {
-		operation, err := New(provider(ctrl), mocknotifier.NewMockNotifier(nil), &mockRFC0593Provider{})
+		operation, err := New(provider(ctrl, nil), mocknotifier.NewMockNotifier(nil), &mockRFC0593Provider{})
 		require.NoError(t, err)
 
 		_, code, err := sendRequestToHandler(
@@ -143,12 +331,45 @@ func TestOperation_AcceptRequest(t *testing.T) {
 	})
 }
 
+func TestOperation_AcceptRequestV3(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	t.Run("No payload", func(t *testing.T) {
+		operation, err := New(provider(ctrl, nil), mocknotifier.NewMockNotifier(nil), &mockRFC0593Provider{})
+		require.NoError(t, err)
+
+		buf, code, err := sendRequestToHandler(
+			handlerLookup(t, operation, AcceptRequestV3), nil,
+			strings.Replace(AcceptRequestV3, `{piid}`, "1234", 1),
+		)
+
+		require.NoError(t, err)
+		require.Equal(t, http.StatusBadRequest, code)
+		require.Contains(t, buf.String(), "payload was not provided")
+	})
+
+	t.Run("Success", func(t *testing.T) {
+		operation, err := New(provider(ctrl, nil), mocknotifier.NewMockNotifier(nil), &mockRFC0593Provider{})
+		require.NoError(t, err)
+
+		_, code, err := sendRequestToHandler(
+			handlerLookup(t, operation, AcceptRequestV3),
+			bytes.NewBufferString(`{"issue_credential":{}}`),
+			strings.Replace(AcceptRequestV3, `{piid}`, "1234", 1),
+		)
+
+		require.NoError(t, err)
+		require.Equal(t, http.StatusOK, code)
+	})
+}
+
 func TestOperation_NegotiateProposal(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
 	t.Run("No payload", func(t *testing.T) {
-		operation, err := New(provider(ctrl), mocknotifier.NewMockNotifier(nil), &mockRFC0593Provider{})
+		operation, err := New(provider(ctrl, nil), mocknotifier.NewMockNotifier(nil), &mockRFC0593Provider{})
 		require.NoError(t, err)
 
 		buf, code, err := sendRequestToHandler(
@@ -162,7 +383,7 @@ func TestOperation_NegotiateProposal(t *testing.T) {
 	})
 
 	t.Run("Success", func(t *testing.T) {
-		operation, err := New(provider(ctrl), mocknotifier.NewMockNotifier(nil), &mockRFC0593Provider{})
+		operation, err := New(provider(ctrl, nil), mocknotifier.NewMockNotifier(nil), &mockRFC0593Provider{})
 		require.NoError(t, err)
 
 		_, code, err := sendRequestToHandler(
@@ -176,12 +397,45 @@ func TestOperation_NegotiateProposal(t *testing.T) {
 	})
 }
 
+func TestOperation_NegotiateProposalV3(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	t.Run("No payload", func(t *testing.T) {
+		operation, err := New(provider(ctrl, nil), mocknotifier.NewMockNotifier(nil), &mockRFC0593Provider{})
+		require.NoError(t, err)
+
+		buf, code, err := sendRequestToHandler(
+			handlerLookup(t, operation, NegotiateProposalV3), nil,
+			strings.Replace(NegotiateProposalV3, `{piid}`, "1234", 1),
+		)
+
+		require.NoError(t, err)
+		require.Equal(t, http.StatusBadRequest, code)
+		require.Contains(t, buf.String(), "payload was not provided")
+	})
+
+	t.Run("Success", func(t *testing.T) {
+		operation, err := New(provider(ctrl, nil), mocknotifier.NewMockNotifier(nil), &mockRFC0593Provider{})
+		require.NoError(t, err)
+
+		_, code, err := sendRequestToHandler(
+			handlerLookup(t, operation, NegotiateProposalV3),
+			bytes.NewBufferString(`{"propose_credential":{}}`),
+			strings.Replace(NegotiateProposalV3, `{piid}`, "1234", 1),
+		)
+
+		require.NoError(t, err)
+		require.Equal(t, http.StatusOK, code)
+	})
+}
+
 func TestOperation_AcceptCredential(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
 	t.Run("No payload", func(t *testing.T) {
-		operation, err := New(provider(ctrl), mocknotifier.NewMockNotifier(nil), &mockRFC0593Provider{})
+		operation, err := New(provider(ctrl, nil), mocknotifier.NewMockNotifier(nil), &mockRFC0593Provider{})
 		require.NoError(t, err)
 
 		buf, code, err := sendRequestToHandler(
@@ -195,7 +449,7 @@ func TestOperation_AcceptCredential(t *testing.T) {
 	})
 
 	t.Run("Empty payload (success)", func(t *testing.T) {
-		operation, err := New(provider(ctrl), mocknotifier.NewMockNotifier(nil), &mockRFC0593Provider{})
+		operation, err := New(provider(ctrl, nil), mocknotifier.NewMockNotifier(nil), &mockRFC0593Provider{})
 		require.NoError(t, err)
 
 		_, code, err := sendRequestToHandler(
@@ -209,7 +463,7 @@ func TestOperation_AcceptCredential(t *testing.T) {
 	})
 
 	t.Run("Success", func(t *testing.T) {
-		operation, err := New(provider(ctrl), mocknotifier.NewMockNotifier(nil), &mockRFC0593Provider{})
+		operation, err := New(provider(ctrl, nil), mocknotifier.NewMockNotifier(nil), &mockRFC0593Provider{})
 		require.NoError(t, err)
 
 		_, code, err := sendRequestToHandler(
@@ -228,7 +482,7 @@ func TestOperation_DeclineProposal(t *testing.T) {
 	defer ctrl.Finish()
 
 	t.Run("Success", func(t *testing.T) {
-		operation, err := New(provider(ctrl), mocknotifier.NewMockNotifier(nil), &mockRFC0593Provider{})
+		operation, err := New(provider(ctrl, nil), mocknotifier.NewMockNotifier(nil), &mockRFC0593Provider{})
 		require.NoError(t, err)
 
 		_, code, err := sendRequestToHandler(
@@ -247,7 +501,7 @@ func TestOperation_DeclineOffer(t *testing.T) {
 	defer ctrl.Finish()
 
 	t.Run("Success", func(t *testing.T) {
-		operation, err := New(provider(ctrl), mocknotifier.NewMockNotifier(nil), &mockRFC0593Provider{})
+		operation, err := New(provider(ctrl, nil), mocknotifier.NewMockNotifier(nil), &mockRFC0593Provider{})
 		require.NoError(t, err)
 
 		_, code, err := sendRequestToHandler(
@@ -266,7 +520,7 @@ func TestOperation_DeclineRequest(t *testing.T) {
 	defer ctrl.Finish()
 
 	t.Run("Success", func(t *testing.T) {
-		operation, err := New(provider(ctrl), mocknotifier.NewMockNotifier(nil), &mockRFC0593Provider{})
+		operation, err := New(provider(ctrl, nil), mocknotifier.NewMockNotifier(nil), &mockRFC0593Provider{})
 		require.NoError(t, err)
 
 		_, code, err := sendRequestToHandler(
@@ -285,7 +539,7 @@ func TestOperation_DeclineCredential(t *testing.T) {
 	defer ctrl.Finish()
 
 	t.Run("Success", func(t *testing.T) {
-		operation, err := New(provider(ctrl), mocknotifier.NewMockNotifier(nil), &mockRFC0593Provider{})
+		operation, err := New(provider(ctrl, nil), mocknotifier.NewMockNotifier(nil), &mockRFC0593Provider{})
 		require.NoError(t, err)
 
 		_, code, err := sendRequestToHandler(
@@ -390,12 +644,43 @@ func (m *mockService) Actions() ([]issuecredential.Action, error) {
 	return nil, nil
 }
 
-func (m *mockService) ActionContinue(string, issuecredential.Opt) error {
+func (m *mockService) ActionContinue(string, ...issuecredential.Opt) error {
 	return nil
 }
 
-func (m *mockService) ActionStop(string, error) error {
+func (m *mockService) ActionStop(string, error, ...issuecredential.Opt) error {
 	return nil
 }
 
 func (m *mockService) AddMiddleware(...issuecredential.Middleware) {}
+
+func mockConnectionRecorder(t *testing.T, records ...connection.Record) *connection.Recorder {
+	t.Helper()
+
+	storeProv := mockstore.NewMockStoreProvider()
+
+	prov := mockprovider.Provider{
+		StorageProviderValue:              storeProv,
+		ProtocolStateStorageProviderValue: storeProv,
+	}
+
+	recorder, err := connection.NewRecorder(&prov)
+	require.NoError(t, err)
+
+	for i := 0; i < len(records); i++ {
+		rec := records[i]
+
+		if rec.ConnectionID == "" {
+			rec.ConnectionID = uuid.New().String()
+		}
+
+		if rec.State == "" {
+			rec.State = connection.StateNameCompleted
+		}
+
+		err = recorder.SaveConnectionRecord(&rec)
+		require.NoError(t, err)
+	}
+
+	return recorder
+}

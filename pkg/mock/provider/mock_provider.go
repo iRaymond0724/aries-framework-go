@@ -6,13 +6,20 @@ SPDX-License-Identifier: Apache-2.0
 package provider
 
 import (
+	"time"
+
 	jsonld "github.com/piprate/json-gold/ld"
 
 	"github.com/hyperledger/aries-framework-go/pkg/crypto"
+	"github.com/hyperledger/aries-framework-go/pkg/didcomm/common/middleware"
+	"github.com/hyperledger/aries-framework-go/pkg/didcomm/common/service"
 	"github.com/hyperledger/aries-framework-go/pkg/didcomm/dispatcher"
 	"github.com/hyperledger/aries-framework-go/pkg/didcomm/packer"
+	"github.com/hyperledger/aries-framework-go/pkg/didcomm/transport"
+	"github.com/hyperledger/aries-framework-go/pkg/framework/aries/api"
 	vdrapi "github.com/hyperledger/aries-framework-go/pkg/framework/aries/api/vdr"
 	"github.com/hyperledger/aries-framework-go/pkg/kms"
+	"github.com/hyperledger/aries-framework-go/pkg/secretlock"
 	"github.com/hyperledger/aries-framework-go/pkg/store/did"
 	"github.com/hyperledger/aries-framework-go/pkg/store/ld"
 	"github.com/hyperledger/aries-framework-go/spi/storage"
@@ -39,6 +46,70 @@ type Provider struct {
 	KeyTypeValue                      kms.KeyType
 	KeyAgreementTypeValue             kms.KeyType
 	MediaTypeProfilesValue            []string
+	InboundMessageHandlerValue        transport.InboundMessageHandler
+	PackagerValue                     transport.Packager
+	MessageServiceProviderValue       api.MessageServiceProvider
+	InboundMessengerValue             service.InboundMessenger
+	GetDIDsBackoffDurationValue       time.Duration
+	GetDIDsMaxRetriesValue            uint64
+	DIDRotatorValue                   middleware.DIDCommMessageMiddleware
+	MessengerValue                    service.Messenger
+	SecretLockValue                   secretlock.Service
+}
+
+// SecretLock returns secret lock.
+func (p *Provider) SecretLock() secretlock.Service {
+	return p.SecretLockValue
+}
+
+// Messenger return messenger.
+func (p *Provider) Messenger() service.Messenger {
+	return p.MessengerValue
+}
+
+// MessageServiceProvider return message service provider.
+func (p *Provider) MessageServiceProvider() api.MessageServiceProvider {
+	return p.MessageServiceProviderValue
+}
+
+// AllServices return all services.
+func (p *Provider) AllServices() []dispatcher.ProtocolService {
+	out := []dispatcher.ProtocolService{}
+
+	for _, v := range p.ServiceMap {
+		out = append(out, v.(dispatcher.ProtocolService))
+	}
+
+	if p.ServiceValue != nil {
+		out = append(out, p.ServiceValue.(dispatcher.ProtocolService))
+	}
+
+	return out
+}
+
+// GetDIDsBackOffDuration return backoff duration for getting DIDs.
+func (p *Provider) GetDIDsBackOffDuration() time.Duration {
+	return p.GetDIDsBackoffDurationValue
+}
+
+// GetDIDsMaxRetries return max number of retries for getting DIDs.
+func (p *Provider) GetDIDsMaxRetries() uint64 {
+	return p.GetDIDsMaxRetriesValue
+}
+
+// InboundMessenger return inbound messenger.
+func (p *Provider) InboundMessenger() service.InboundMessenger {
+	return p.InboundMessengerValue
+}
+
+// InboundMessageHandler return inbound message handler.
+func (p *Provider) InboundMessageHandler() transport.InboundMessageHandler {
+	return p.InboundMessageHandlerValue
+}
+
+// Packager return packager.
+func (p *Provider) Packager() transport.Packager {
+	return p.PackagerValue
 }
 
 // Service return service.
@@ -137,4 +208,9 @@ func (p *Provider) KeyType() kms.KeyType {
 // KeyAgreementType returns a mocked keyType value for KeyAgreement.
 func (p *Provider) KeyAgreementType() kms.KeyType {
 	return p.KeyAgreementTypeValue
+}
+
+// DIDRotator returns the did rotator.
+func (p *Provider) DIDRotator() *middleware.DIDCommMessageMiddleware {
+	return &p.DIDRotatorValue
 }

@@ -9,6 +9,7 @@ package packager_test
 import (
 	"encoding/base64"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -444,6 +445,10 @@ func packUnPackSuccess(keyType kms.KeyType, customKMS kms.KeyManager, cryptoSvc 
 			mediaType: transport.MediaTypeAIP2RFC0019Profile,
 		},
 		{
+			name:      fmt.Sprintf("success using mediaType %s", transport.MediaTypeProfileDIDCommAIP1),
+			mediaType: transport.MediaTypeProfileDIDCommAIP1,
+		},
+		{
 			name:      fmt.Sprintf("success using mediaType %s", transport.MediaTypeAIP2RFC0587Profile),
 			mediaType: transport.MediaTypeAIP2RFC0587Profile,
 		},
@@ -474,7 +479,8 @@ func packUnPackSuccess(keyType kms.KeyType, customKMS kms.KeyManager, cryptoSvc 
 			)
 
 			switch tc.mediaType {
-			case transport.MediaTypeRFC0019EncryptedEnvelope, transport.MediaTypeAIP2RFC0019Profile:
+			case transport.MediaTypeRFC0019EncryptedEnvelope, transport.MediaTypeAIP2RFC0019Profile,
+				transport.MediaTypeProfileDIDCommAIP1:
 				fromKIDPack = []byte(fromDIDKeyED25519)
 				toKIDsPack = []string{toLegacyDIDKey}
 			case transport.MediaTypeV1EncryptedEnvelope, transport.MediaTypeV1PlaintextPayload,
@@ -496,6 +502,92 @@ func packUnPackSuccess(keyType kms.KeyType, customKMS kms.KeyManager, cryptoSvc 
 				Message:          []byte("msg"),
 				FromKey:          fromKIDPack,
 				ToKeys:           toKIDsPack,
+			})
+			require.NoError(t, err)
+
+			// unpack the packed message above - should pass and match the same payload (msg1)
+			unpackedMsg, err := packager.UnpackMessage(packMsg)
+			require.NoError(t, err)
+			require.Equal(t, unpackedMsg.Message, []byte("msg"))
+
+			switch tc.mediaType {
+			case transport.MediaTypeV1EncryptedEnvelope, transport.MediaTypeV1PlaintextPayload,
+				transport.MediaTypeV2EncryptedEnvelopeV1PlaintextPayload, transport.MediaTypeV2PlaintextPayload,
+				transport.MediaTypeV2EncryptedEnvelope, transport.MediaTypeAIP2RFC0587Profile,
+				transport.MediaTypeDIDCommV2Profile:
+				// try to unpack with packedMsg base64 encoded and wrapped with double quotes.
+				wrappedMsg := append([]byte("\""), []byte(base64.RawURLEncoding.EncodeToString(packMsg))...)
+				wrappedMsg = append(wrappedMsg, []byte("\"")...)
+				unpackedMsg, err = packager.UnpackMessage(wrappedMsg)
+				require.NoError(t, err)
+				require.Equal(t, unpackedMsg.Message, []byte("msg"))
+			}
+		})
+	}
+}
+
+func TestPackagerLegacyInterop(t *testing.T) {
+	customKMS, err := localkms.New(localKeyURI, newMockKMSProvider(mockstorage.NewMockStoreProvider()))
+	require.NoError(t, err)
+	require.NotEmpty(t, customKMS)
+
+	cryptoSvc, err := tinkcrypto.New()
+	require.NoError(t, err)
+
+	resolveLegacyDIDFunc, legacyFromDID, legacyToDID := newLegacyDIDsAndDIDDocResolverFunc(t, customKMS)
+
+	mockedProviders := &mockProvider{
+		kms:           customKMS,
+		primaryPacker: nil,
+		packers:       nil,
+		crypto:        cryptoSvc,
+		// vdr context for DID doc resolution:
+		vdr: &mockvdr.MockVDRegistry{
+			ResolveFunc: resolveLegacyDIDFunc,
+		},
+	}
+
+	legacyPacker := legacy.New(mockedProviders)
+	mockedProviders.primaryPacker = legacyPacker
+	mockedProviders.packers = []packer.Packer{legacyPacker}
+
+	// now create a new packager with the above provider context
+	packager, err := New(mockedProviders)
+	require.NoError(t, err)
+
+	tests := []struct {
+		name              string
+		mediaType         string
+		isKeyAgreementKey bool
+		fromKIDPack       []byte
+		toKIDsPack        []string
+	}{
+		{
+			name: fmt.Sprintf("success using mediaType %s with did key references",
+				transport.MediaTypeRFC0019EncryptedEnvelope),
+			mediaType:   transport.MediaTypeRFC0019EncryptedEnvelope,
+			fromKIDPack: []byte(legacyFromDID.VerificationMethod[0].ID),
+			toKIDsPack:  []string{legacyToDID.VerificationMethod[0].ID},
+		},
+		{
+			name: fmt.Sprintf("success using mediaType %s with raw keys",
+				transport.MediaTypeRFC0019EncryptedEnvelope),
+			mediaType:   transport.MediaTypeRFC0019EncryptedEnvelope,
+			fromKIDPack: legacyFromDID.VerificationMethod[0].Value,
+			toKIDsPack:  []string{string(legacyToDID.VerificationMethod[0].Value)},
+		},
+	}
+
+	for _, tt := range tests {
+		tc := tt
+
+		t.Run(tc.name, func(t *testing.T) {
+			// pack a non-empty envelope using packer selected by mediaType - should pass
+			packMsg, err := packager.PackMessage(&transport.Envelope{
+				MediaTypeProfile: tc.mediaType,
+				Message:          []byte("msg"),
+				FromKey:          tc.fromKIDPack,
+				ToKeys:           tc.toKIDsPack,
 			})
 			require.NoError(t, err)
 
@@ -654,8 +746,12 @@ func TestPackager_PackMessage_KeyAgreementID_Failures(t *testing.T) {
 	}
 }
 
+type resolverFunc func(didID string, opts ...vdrapi.DIDMethodOption) (*did.DocResolution, error)
+
 //nolint:lll
-func newDIDsAndDIDDocResolverFunc(customKMS kms.KeyManager, keyType kms.KeyType, t *testing.T) (func(didID string, opts ...vdrapi.DIDMethodOption) (*did.DocResolution, error), string, string, *did.Doc, *did.Doc) {
+func newDIDsAndDIDDocResolverFunc(customKMS kms.KeyManager, keyType kms.KeyType, t *testing.T) (resolverFunc, string, string, *did.Doc, *did.Doc) {
+	t.Helper()
+
 	_, fromKey, err := customKMS.CreateAndExportPubKeyBytes(keyType)
 	require.NoError(t, err)
 
@@ -718,6 +814,50 @@ func newDIDsAndDIDDocResolverFunc(customKMS kms.KeyManager, keyType kms.KeyType,
 	}
 
 	return resolveDID, fromDIDKey, toDIDKey, fromDID, toDID
+}
+
+func makeRawKey(t *testing.T, customKMS kms.KeyManager) []byte {
+	t.Helper()
+
+	var (
+		key []byte
+		err error
+	)
+
+	// for tests using raw keys, we need raw keys that won't be misinterpreted as did key references.
+	for key == nil || strings.Index(string(key), "#") > 0 { //nolint:gocritic // need to check with strings
+		_, key, err = customKMS.CreateAndExportPubKeyBytes(kms.ED25519Type)
+		require.NoError(t, err)
+	}
+
+	return key
+}
+
+func newLegacyDIDsAndDIDDocResolverFunc(t *testing.T, customKMS kms.KeyManager) (resolverFunc, *did.Doc, *did.Doc) {
+	t.Helper()
+
+	fromKey := makeRawKey(t, customKMS)
+	toKey := makeRawKey(t, customKMS)
+
+	fromDID := mockdiddoc.GetLegacyInteropMockDIDDoc(t, "AliceDIDInterop", fromKey)
+	toDID := mockdiddoc.GetLegacyInteropMockDIDDoc(t, "BobDIDInterop", toKey)
+
+	resolveDID := func(didID string, opts ...vdrapi.DIDMethodOption) (*did.DocResolution, error) {
+		switch didID {
+		case toDID.ID:
+			return &did.DocResolution{
+				DIDDocument: toDID,
+			}, nil
+		case fromDID.ID:
+			return &did.DocResolution{
+				DIDDocument: fromDID,
+			}, nil
+		default:
+			return nil, fmt.Errorf("did not found: %s", didID)
+		}
+	}
+
+	return resolveDID, fromDID, toDID
 }
 
 func newMockKMSProvider(storagePvdr *mockstorage.MockStoreProvider) *mockProvider {

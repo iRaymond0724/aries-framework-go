@@ -10,7 +10,16 @@ import (
 	"errors"
 
 	"github.com/hyperledger/aries-framework-go/pkg/didcomm/common/service"
+	"github.com/hyperledger/aries-framework-go/pkg/didcomm/protocol/decorator"
 	"github.com/hyperledger/aries-framework-go/pkg/didcomm/protocol/issuecredential"
+	issuecredentialmiddleware "github.com/hyperledger/aries-framework-go/pkg/didcomm/protocol/middleware/issuecredential"
+	"github.com/hyperledger/aries-framework-go/pkg/store/connection"
+)
+
+const (
+	// web redirect decorator.
+	webRedirectDecorator  = "~web-redirect"
+	webRedirectStatusFAIL = "FAIL"
 )
 
 var (
@@ -22,20 +31,52 @@ var (
 type (
 	// OfferCredential is a message sent by the Issuer to the potential Holder,
 	// describing the credential they intend to offer and possibly the price they expect to be paid.
-	OfferCredential issuecredential.OfferCredential
+	OfferCredential = issuecredential.OfferCredentialParams
+	// OfferCredentialV2 is a message sent by the Issuer to the potential Holder,
+	// describing the credential they intend to offer and possibly the price they expect to be paid.
+	OfferCredentialV2 issuecredential.OfferCredentialV2
+	// OfferCredentialV3 is a message sent by the Issuer to the potential Holder,
+	// describing the credential they intend to offer and possibly the price they expect to be paid.
+	OfferCredentialV3 issuecredential.OfferCredentialV3
 	// ProposeCredential is an optional message sent by the potential Holder to the Issuer
 	// to initiate the protocol or in response to a offer-credential message when the Holder
 	// wants some adjustments made to the credential data offered by Issuer.
-	ProposeCredential issuecredential.ProposeCredential
+	ProposeCredential = issuecredential.ProposeCredentialParams
+	// ProposeCredentialV2 is an optional message sent by the potential Holder to the Issuer
+	// to initiate the protocol or in response to a offer-credential message when the Holder
+	// wants some adjustments made to the credential data offered by Issuer.
+	ProposeCredentialV2 issuecredential.ProposeCredentialV2
+	// ProposeCredentialV3 is an optional message sent by the potential Holder to the Issuer
+	// to initiate the protocol or in response to a offer-credential message when the Holder
+	// wants some adjustments made to the credential data offered by Issuer.
+	ProposeCredentialV3 issuecredential.ProposeCredentialV3
 	// RequestCredential is a message sent by the potential Holder to the Issuer,
 	// to request the issuance of a credential. Where circumstances do not require
 	// a preceding Offer Credential message (e.g., there is no cost to issuance
 	// that the Issuer needs to explain in advance, and there is no need for cryptographic negotiation),
 	// this message initiates the protocol.
-	RequestCredential issuecredential.RequestCredential
+	RequestCredential = issuecredential.RequestCredentialParams
+	// RequestCredentialV2 is a message sent by the potential Holder to the Issuer,
+	// to request the issuance of a credential. Where circumstances do not require
+	// a preceding Offer Credential message (e.g., there is no cost to issuance
+	// that the Issuer needs to explain in advance, and there is no need for cryptographic negotiation),
+	// this message initiates the protocol.
+	RequestCredentialV2 issuecredential.RequestCredentialV2
+	// RequestCredentialV3 is a message sent by the potential Holder to the Issuer,
+	// to request the issuance of a credential. Where circumstances do not require
+	// a preceding Offer Credential message (e.g., there is no cost to issuance
+	// that the Issuer needs to explain in advance, and there is no need for cryptographic negotiation),
+	// this message initiates the protocol.
+	RequestCredentialV3 issuecredential.RequestCredentialV3
 	// IssueCredential contains as attached payload the credentials being issued and is
 	// sent in response to a valid Invitation Credential message.
-	IssueCredential issuecredential.IssueCredential
+	IssueCredential = issuecredential.IssueCredentialParams
+	// IssueCredentialV2 contains as attached payload the credentials being issued and is
+	// sent in response to a valid Invitation Credential message.
+	IssueCredentialV2 issuecredential.IssueCredentialV2 //nolint: golint
+	// IssueCredentialV3 contains as attached payload the credentials being issued and is
+	// sent in response to a valid Invitation Credential message.
+	IssueCredentialV3 issuecredential.IssueCredentialV3 //nolint: golint
 	// Action contains helpful information about action.
 	Action issuecredential.Action
 )
@@ -49,8 +90,8 @@ type Provider interface {
 type ProtocolService interface {
 	service.DIDComm
 	Actions() ([]issuecredential.Action, error)
-	ActionContinue(piID string, opt issuecredential.Opt) error
-	ActionStop(piID string, err error) error
+	ActionContinue(piID string, opt ...issuecredential.Opt) error
+	ActionStop(piID string, err error, opt ...issuecredential.Opt) error
 }
 
 // Client enable access to issuecredential API.
@@ -93,36 +134,75 @@ func (c *Client) Actions() ([]Action, error) {
 }
 
 // SendOffer is used by the Issuer to send an offer.
-func (c *Client) SendOffer(offer *OfferCredential, myDID, theirDID string) (string, error) {
+func (c *Client) SendOffer(offer *OfferCredential, conn *connection.Record) (string, error) {
 	if offer == nil {
 		return "", errEmptyOffer
 	}
 
-	offer.Type = issuecredential.OfferCredentialMsgType
+	var msg service.DIDCommMsg
 
-	return c.service.HandleOutbound(service.NewDIDCommMsgMap(offer), myDID, theirDID)
+	switch conn.DIDCommVersion {
+	default:
+		fallthrough
+	case service.V1:
+		offer.Type = issuecredential.OfferCredentialMsgTypeV2
+
+		msg = service.NewDIDCommMsgMap(offer.AsV2())
+	case service.V2:
+		offer.Type = issuecredential.OfferCredentialMsgTypeV3
+
+		msg = service.NewDIDCommMsgMap(offer.AsV3())
+	}
+
+	return c.service.HandleOutbound(msg, conn.MyDID, conn.TheirDID)
 }
 
 // SendProposal is used by the Holder to send a proposal.
-func (c *Client) SendProposal(proposal *ProposeCredential, myDID, theirDID string) (string, error) {
+func (c *Client) SendProposal(proposal *ProposeCredential, conn *connection.Record) (string, error) {
 	if proposal == nil {
 		return "", errEmptyProposal
 	}
 
-	proposal.Type = issuecredential.ProposeCredentialMsgType
+	var msg service.DIDCommMsg
 
-	return c.service.HandleOutbound(service.NewDIDCommMsgMap(proposal), myDID, theirDID)
+	switch conn.DIDCommVersion {
+	default:
+		fallthrough
+	case service.V1:
+		proposal.Type = issuecredential.ProposeCredentialMsgTypeV2
+
+		msg = service.NewDIDCommMsgMap(proposal.AsV2())
+	case service.V2:
+		proposal.Type = issuecredential.ProposeCredentialMsgTypeV3
+
+		msg = service.NewDIDCommMsgMap(proposal.AsV3())
+	}
+
+	return c.service.HandleOutbound(msg, conn.MyDID, conn.TheirDID)
 }
 
 // SendRequest is used by the Holder to send a request.
-func (c *Client) SendRequest(request *RequestCredential, myDID, theirDID string) (string, error) {
+func (c *Client) SendRequest(request *RequestCredential, conn *connection.Record) (string, error) {
 	if request == nil {
 		return "", errEmptyRequest
 	}
 
-	request.Type = issuecredential.RequestCredentialMsgType
+	var msg service.DIDCommMsg
 
-	return c.service.HandleOutbound(service.NewDIDCommMsgMap(request), myDID, theirDID)
+	switch conn.DIDCommVersion {
+	default:
+		fallthrough
+	case service.V1:
+		request.Type = issuecredential.RequestCredentialMsgTypeV2
+
+		msg = service.NewDIDCommMsgMap(request.AsV2())
+	case service.V2:
+		request.Type = issuecredential.RequestCredentialMsgTypeV3
+
+		msg = service.NewDIDCommMsgMap(request.AsV3())
+	}
+
+	return c.service.HandleOutbound(msg, conn.MyDID, conn.TheirDID)
 }
 
 // AcceptProposal is used when the Issuer is willing to accept the proposal.
@@ -131,21 +211,9 @@ func (c *Client) AcceptProposal(piID string, msg *OfferCredential) error {
 	return c.service.ActionContinue(piID, WithOfferCredential(msg))
 }
 
-// DeclineProposal is used when the Issuer does not want to accept the proposal.
-// NOTE: For async usage.
-func (c *Client) DeclineProposal(piID, reason string) error {
-	return c.service.ActionStop(piID, errors.New(reason))
-}
-
 // AcceptOffer is used when the Holder is willing to accept the offer.
-func (c *Client) AcceptOffer(piID string) error {
-	return c.service.ActionContinue(piID, nil)
-}
-
-// DeclineOffer is used when the Holder does not want to accept the offer.
-// NOTE: For async usage.
-func (c *Client) DeclineOffer(piID, reason string) error {
-	return c.service.ActionStop(piID, errors.New(reason))
+func (c *Client) AcceptOffer(piID string, msg *RequestCredential) error {
+	return c.service.ActionContinue(piID, WithRequestCredential(msg))
 }
 
 // NegotiateProposal is used when the Holder wants to negotiate about an offer he received.
@@ -160,16 +228,40 @@ func (c *Client) AcceptRequest(piID string, msg *IssueCredential) error {
 	return c.service.ActionContinue(piID, WithIssueCredential(msg))
 }
 
+// DeclineProposal is used when the Issuer does not want to accept the proposal.
+// NOTE: For async usage.
+func (c *Client) DeclineProposal(piID, reason string, options ...IssuerDeclineOptions) error {
+	return c.service.ActionStop(piID, errors.New(reason), prepareRedirectProperties(webRedirectStatusFAIL, options...))
+}
+
+// DeclineOffer is used when the Holder does not want to accept the offer.
+// NOTE: For async usage.
+func (c *Client) DeclineOffer(piID, reason string) error {
+	return c.service.ActionStop(piID, errors.New(reason))
+}
+
 // DeclineRequest is used when the Issuer does not want to accept the request.
 // NOTE: For async usage.
-func (c *Client) DeclineRequest(piID, reason string) error {
-	return c.service.ActionStop(piID, errors.New(reason))
+func (c *Client) DeclineRequest(piID, reason string, options ...IssuerDeclineOptions) error {
+	return c.service.ActionStop(piID, errors.New(reason), prepareRedirectProperties(webRedirectStatusFAIL, options...))
 }
 
 // AcceptCredential is used when the Holder is willing to accept the IssueCredential.
 // NOTE: For async usage.
-func (c *Client) AcceptCredential(piID string, names ...string) error {
-	return c.service.ActionContinue(piID, WithFriendlyNames(names...))
+func (c *Client) AcceptCredential(piID string, options ...AcceptCredentialOptions) error {
+	opts := &acceptCredentialOpts{}
+
+	for _, option := range options {
+		option(opts)
+	}
+
+	properties := map[string]interface{}{}
+
+	if opts.skipStore {
+		properties[issuecredentialmiddleware.SkipCredentialSaveKey] = true
+	}
+
+	return c.service.ActionContinue(piID, WithFriendlyNames(opts.names...), issuecredential.WithProperties(properties))
 }
 
 // DeclineCredential is used when the Holder does not want to accept the IssueCredential.
@@ -180,13 +272,13 @@ func (c *Client) DeclineCredential(piID, reason string) error {
 
 // AcceptProblemReport accepts problem report action.
 func (c *Client) AcceptProblemReport(piID string) error {
-	return c.service.ActionContinue(piID, nil)
+	return c.service.ActionContinue(piID)
 }
 
 // WithProposeCredential allows providing ProposeCredential message
 // USAGE: This message should be provided after receiving an OfferCredential message.
 func WithProposeCredential(msg *ProposeCredential) issuecredential.Opt {
-	origin := issuecredential.ProposeCredential(*msg)
+	origin := *msg
 
 	return issuecredential.WithProposeCredential(&origin)
 }
@@ -194,7 +286,7 @@ func WithProposeCredential(msg *ProposeCredential) issuecredential.Opt {
 // WithRequestCredential allows providing RequestCredential message
 // USAGE: This message should be provided after receiving an OfferCredential message.
 func WithRequestCredential(msg *RequestCredential) issuecredential.Opt {
-	origin := issuecredential.RequestCredential(*msg)
+	origin := *msg
 
 	return issuecredential.WithRequestCredential(&origin)
 }
@@ -202,7 +294,7 @@ func WithRequestCredential(msg *RequestCredential) issuecredential.Opt {
 // WithOfferCredential allows providing OfferCredential message
 // USAGE: This message should be provided after receiving a ProposeCredential message.
 func WithOfferCredential(msg *OfferCredential) issuecredential.Opt {
-	origin := issuecredential.OfferCredential(*msg)
+	origin := *msg
 
 	return issuecredential.WithOfferCredential(&origin)
 }
@@ -210,7 +302,7 @@ func WithOfferCredential(msg *OfferCredential) issuecredential.Opt {
 // WithIssueCredential allows providing IssueCredential message
 // USAGE: This message should be provided after receiving a RequestCredential message.
 func WithIssueCredential(msg *IssueCredential) issuecredential.Opt {
-	origin := issuecredential.IssueCredential(*msg)
+	origin := *msg
 
 	return issuecredential.WithIssueCredential(&origin)
 }
@@ -219,4 +311,63 @@ func WithIssueCredential(msg *IssueCredential) issuecredential.Opt {
 // USAGE: This function should be used when the Holder receives IssueCredential message.
 func WithFriendlyNames(names ...string) issuecredential.Opt {
 	return issuecredential.WithFriendlyNames(names...)
+}
+
+// acceptCredentialOpts options for accepting credential in holder.
+type acceptCredentialOpts struct {
+	names     []string
+	skipStore bool
+}
+
+// AcceptCredentialOptions is custom option for accepting credential in holder.
+type AcceptCredentialOptions func(opts *acceptCredentialOpts)
+
+// AcceptByFriendlyNames option to provide optional friendly names for accepting credentials.
+func AcceptByFriendlyNames(names ...string) AcceptCredentialOptions {
+	return func(opts *acceptCredentialOpts) {
+		opts.names = names
+	}
+}
+
+// AcceptBySkippingStorage skips storing incoming credential to storage.
+func AcceptBySkippingStorage() AcceptCredentialOptions {
+	return func(opts *acceptCredentialOpts) {
+		opts.skipStore = true
+	}
+}
+
+// redirectOpts options for web redirect information to holder from issuer.
+type redirectOpts struct {
+	redirect string
+}
+
+// IssuerDeclineOptions is custom option for sending web redirect options to holder.
+// https://github.com/hyperledger/aries-rfcs/tree/main/concepts/0700-oob-through-redirect
+type IssuerDeclineOptions func(opts *redirectOpts)
+
+// RequestRedirect option to provide optional redirect URL requesting holder to redirect.
+func RequestRedirect(url string) IssuerDeclineOptions {
+	return func(opts *redirectOpts) {
+		opts.redirect = url
+	}
+}
+
+// create web redirect properties to add ~web-redirect decorator.
+func prepareRedirectProperties(status string, options ...IssuerDeclineOptions) issuecredential.Opt {
+	properties := map[string]interface{}{}
+
+	opts := &redirectOpts{}
+
+	for _, option := range options {
+		option(opts)
+	}
+
+	if opts.redirect != "" {
+		properties[webRedirectDecorator] = &decorator.WebRedirect{
+			Status: status,
+			URL:    opts.redirect,
+		}
+	}
+
+	return issuecredential.WithProperties(properties)
 }

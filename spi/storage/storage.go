@@ -20,11 +20,15 @@ type MultiError interface {
 	Errors() []error // Errors returns the error objects for all operations.
 }
 
-// ErrStoreNotFound is returned when a store is not found.
-var ErrStoreNotFound = errors.New("store not found")
-
-// ErrDataNotFound is returned when data is not found.
-var ErrDataNotFound = errors.New("data not found")
+var (
+	// ErrStoreNotFound is returned when a store is not found.
+	ErrStoreNotFound = errors.New("store not found")
+	// ErrDataNotFound is returned when data is not found.
+	ErrDataNotFound = errors.New("data not found")
+	// ErrDuplicateKey is returned when a call is made to Store.Batch using the IsNewKey PutOption with a key that
+	// already exists in the database.
+	ErrDuplicateKey = errors.New("duplicate key")
+)
 
 // StoreConfiguration represents the configuration of a store.
 // Currently, it's only used for creating indexes in underlying storage databases.
@@ -116,11 +120,21 @@ type Tag struct {
 	Value string `json:"value,omitempty"`
 }
 
+// PutOptions represents options for a Put Operation.
+type PutOptions struct {
+	// This is an optimization for a Put Operation. Some storage providers may be able to store data faster if they
+	// know beforehand that this key does not currently exist in the database. Unexpected behaviour may occur if
+	// this is set to true and the key already exists. See the documentation for the specific storage provider to
+	// see if and how this option is used.
+	IsNewKey bool `json:"isNewKey,omitempty"`
+}
+
 // Operation represents an operation to be performed in the Batch method.
 type Operation struct {
-	Key   string `json:"key,omitempty"`
-	Value []byte `json:"value,omitempty"` // A nil value will result in a delete operation.
-	Tags  []Tag  `json:"tags,omitempty"`  // Optional.
+	Key        string      `json:"key,omitempty"`
+	Value      []byte      `json:"value,omitempty"`      // A nil value will result in a delete operation.
+	Tags       []Tag       `json:"tags,omitempty"`       // Optional.
+	PutOptions *PutOptions `json:"putOptions,omitempty"` // Optional. Only used for Put Operations.
 }
 
 // Provider represents a storage provider.
@@ -163,7 +177,12 @@ type Provider interface {
 
 // Store represents a storage database.
 type Store interface {
-	// Put stores the key + value pair along with the (optional) tags.
+	// Put stores the key + value pair along with the (optional) tags. If the key already exists in the database,
+	// then the value and tags will be overwritten silently.
+	// If value is a JSON-formatted object, then an underlying storage implementation may store it in a way that
+	// does not preserve the order of the fields. Therefore, you should avoid doing direct byte-for-byte comparisons
+	// with data put in and data retrieved, as the marshalled representation may be different - always unmarshal data
+	// first before comparing.
 	// If key is empty or value is nil, then an error will be returned.
 	Put(key string, value []byte, tags ...Tag) error
 
@@ -185,9 +204,13 @@ type Store interface {
 	GetBulk(keys ...string) ([][]byte, error)
 
 	// Query returns all data that satisfies the expression. Expression format: TagName:TagValue.
-	// If TagValue is not provided, then all data associated with the TagName will be returned.
-	// For now, expression can only be a single tag Name + Value pair.
-	// If no options are provided, then defaults will be used.
+	// If TagValue is not provided, then all data associated with the TagName will be returned, regardless of their
+	// tag values.
+	// At a minimum, a store implementation must be able to support querying with a single TagName:TagValue pair, but a
+	// store implementation may also support querying for multiple TagName:TagValue pairs by separating them with an
+	// && to specify an AND operation or a || to specify an OR operation. For example, a query for
+	// TagName1:TagValue1&&TagName2:TagValue2 will return only data that has been tagged with both pairs.
+	// This method also supports a number of QueryOptions. If none are provided, then defaults will be used.
 	// If your store contains a large amount of data, then it's recommended calling Provider.SetStoreConfig at some
 	// point before calling this method in order to create indexes which will speed up queries.
 	Query(expression string, options ...QueryOption) (Iterator, error)
@@ -196,7 +219,10 @@ type Store interface {
 	// If key is empty, then an error will be returned.
 	Delete(key string) error
 
-	// Batch performs multiple Put and/or Delete operations in order.
+	// Batch performs multiple Put and/or Delete operations in order. The Puts and Deletes here follow the same rules
+	// as described in the Put and Delete method documentation. The only exception is if the operation makes use of
+	// the PutOptions.IsNewKey optimization, in which case an error wrapping an ErrDuplicateKey may be returned if it's
+	// enabled and a key is used that already exists in the database.
 	// Depending on the implementation, this method may be faster than repeated Put and/or Delete calls.
 	// If any of the given keys are empty, or the operations slice is empty or nil, then an error will be returned.
 	Batch(operations []Operation) error
@@ -215,6 +241,7 @@ type Store interface {
 // Iterator allows for iteration over a collection of entries in a store.
 type Iterator interface {
 	// Next moves the pointer to the next entry in the iterator.
+	// Note that it must be called before accessing the first entry.
 	// It returns false if the iterator is exhausted - this is not considered an error.
 	Next() (bool, error)
 

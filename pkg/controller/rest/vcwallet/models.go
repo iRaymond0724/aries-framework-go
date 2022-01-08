@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 
 	"github.com/hyperledger/aries-framework-go/pkg/controller/command/vcwallet"
+	"github.com/hyperledger/aries-framework-go/pkg/wallet"
 )
 
 // createProfileRequest is request model for creating a new wallet profile.
@@ -310,6 +311,59 @@ type presentProofRequest struct { // nolint: unused,deadcode
 	//
 	// in: body
 	Params *vcwallet.PresentProofRequest
+}
+
+// presentProofResponse is response model from wallet present proof operation.
+//
+// swagger:response presentProofRes
+type presentProofResponse struct {
+	// response containing status of present proof operation.
+	//
+	// in: body
+	Response *wallet.CredentialInteractionStatus `json:"response"`
+}
+
+// proposeCredentialRequest is request model for performing propose credential operation from wallet to initiate
+// credential issuance flow.
+//
+// swagger:parameters proposeCredReq
+type proposeCredentialRequest struct { // nolint: unused,deadcode
+	// Params for proposing credential from wallet.
+	//
+	// in: body
+	Params *vcwallet.ProposeCredentialRequest
+}
+
+// proposePresentationResponse is response model from wallet propose credential operation.
+//
+// swagger:response proposeCredRes
+type proposeCredentialResponse struct {
+	// response containing offer credential response from issuer.
+	//
+	// in: body
+	Response *vcwallet.ProposeCredentialResponse `json:"response"`
+}
+
+// requestCredentialRequest is request model for performing request credential operation from wallet to conclude
+// credential issuance flow.
+//
+// swagger:parameters requestCredReq
+type requestCredentialRequest struct { // nolint: unused,deadcode
+	// Params for sending request credential message from wallet and optionally wait for credential fulfillment.
+	//
+	// in: body
+	Params *vcwallet.RequestCredentialRequest
+}
+
+// requestCredentialResponse is response model from wallet request credential operation which may contain
+// credential fulfillment message, status and web redirect info.
+//
+// swagger:response requestCredRes
+type requestCredentialResponse struct {
+	// response containing status of request credential operation.
+	//
+	// in: body
+	Response *wallet.CredentialInteractionStatus `json:"response"`
 }
 
 // emptyRes model

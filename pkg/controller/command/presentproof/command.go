@@ -20,6 +20,7 @@ import (
 	"github.com/hyperledger/aries-framework-go/pkg/didcomm/common/service"
 	protocol "github.com/hyperledger/aries-framework-go/pkg/didcomm/protocol/presentproof"
 	"github.com/hyperledger/aries-framework-go/pkg/internal/logutil"
+	"github.com/hyperledger/aries-framework-go/pkg/store/connection"
 )
 
 const (
@@ -55,17 +56,27 @@ const (
 	// command name.
 	CommandName = "presentproof"
 
-	Actions                      = "Actions"
-	SendRequestPresentation      = "SendRequestPresentation"
-	AcceptRequestPresentation    = "AcceptRequestPresentation"
-	NegotiateRequestPresentation = "NegotiateRequestPresentation"
-	AcceptProblemReport          = "AcceptProblemReport"
-	DeclineRequestPresentation   = "DeclineRequestPresentation"
-	SendProposePresentation      = "SendProposePresentation"
-	AcceptProposePresentation    = "AcceptProposePresentation"
-	DeclineProposePresentation   = "DeclineProposePresentation"
-	AcceptPresentation           = "AcceptPresentation"
-	DeclinePresentation          = "DeclinePresentation"
+	Actions                        = "Actions"
+	SendRequestPresentation        = "SendRequestPresentation"
+	SendRequestPresentationV2      = "SendRequestPresentationV2"
+	SendRequestPresentationV3      = "SendRequestPresentationV3"
+	AcceptRequestPresentation      = "AcceptRequestPresentation"
+	AcceptRequestPresentationV2    = "AcceptRequestPresentationV2"
+	AcceptRequestPresentationV3    = "AcceptRequestPresentationV3"
+	NegotiateRequestPresentation   = "NegotiateRequestPresentation"
+	NegotiateRequestPresentationV2 = "NegotiateRequestPresentationV2"
+	NegotiateRequestPresentationV3 = "NegotiateRequestPresentationV3"
+	AcceptProblemReport            = "AcceptProblemReport"
+	DeclineRequestPresentation     = "DeclineRequestPresentation"
+	SendProposePresentation        = "SendProposePresentation"
+	SendProposePresentationV2      = "SendProposePresentationV2"
+	SendProposePresentationV3      = "SendProposePresentationV3"
+	AcceptProposePresentation      = "AcceptProposePresentation"
+	AcceptProposePresentationV2    = "AcceptProposePresentationV2"
+	AcceptProposePresentationV3    = "AcceptProposePresentationV3"
+	DeclineProposePresentation     = "DeclineProposePresentation"
+	AcceptPresentation             = "AcceptPresentation"
+	DeclinePresentation            = "DeclinePresentation"
 )
 
 const (
@@ -76,6 +87,8 @@ const (
 	errEmptyPresentation        = "empty Presentation"
 	errEmptyProposePresentation = "empty ProposePresentation"
 	errEmptyRequestPresentation = "empty RequestPresentation"
+	errNoConnectionForDIDs      = "no connection for given DIDs"
+	errNoConnectionByID         = "no connection for given connection ID"
 
 	// log constants.
 	successString = "success"
@@ -89,10 +102,17 @@ var logger = log.New("aries-framework/controller/presentproof")
 // Command is controller command for present proof.
 type Command struct {
 	client *presentproof.Client
+	lookup *connection.Lookup
+}
+
+// Provider contains dependencies for the protocol and is typically created by using aries.Context().
+type Provider interface {
+	Service(id string) (interface{}, error)
+	ConnectionLookup() *connection.Lookup
 }
 
 // New returns new present proof controller command instance.
-func New(ctx presentproof.Provider, notifier command.Notifier) (*Command, error) {
+func New(ctx Provider, notifier command.Notifier) (*Command, error) {
 	client, err := presentproof.New(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("cannot create a client: %w", err)
@@ -116,7 +136,10 @@ func New(ctx presentproof.Provider, notifier command.Notifier) (*Command, error)
 	obs.RegisterAction(protocol.Name+_actions, actions)
 	obs.RegisterStateMsg(protocol.Name+_states, states)
 
-	return &Command{client: client}, nil
+	return &Command{
+		client: client,
+		lookup: ctx.ConnectionLookup(),
+	}, nil
 }
 
 // GetHandlers returns list of all commands supported by this controller command.
@@ -124,11 +147,16 @@ func (c *Command) GetHandlers() []command.Handler {
 	return []command.Handler{
 		cmdutil.NewCommandHandler(CommandName, Actions, c.Actions),
 		cmdutil.NewCommandHandler(CommandName, SendRequestPresentation, c.SendRequestPresentation),
+		cmdutil.NewCommandHandler(CommandName, SendRequestPresentationV3, c.SendRequestPresentation),
 		cmdutil.NewCommandHandler(CommandName, AcceptRequestPresentation, c.AcceptRequestPresentation),
+		cmdutil.NewCommandHandler(CommandName, AcceptRequestPresentationV3, c.AcceptRequestPresentation),
 		cmdutil.NewCommandHandler(CommandName, NegotiateRequestPresentation, c.NegotiateRequestPresentation),
+		cmdutil.NewCommandHandler(CommandName, NegotiateRequestPresentationV3, c.NegotiateRequestPresentation),
 		cmdutil.NewCommandHandler(CommandName, DeclineRequestPresentation, c.DeclineRequestPresentation),
 		cmdutil.NewCommandHandler(CommandName, SendProposePresentation, c.SendProposePresentation),
+		cmdutil.NewCommandHandler(CommandName, SendProposePresentationV3, c.SendProposePresentation),
 		cmdutil.NewCommandHandler(CommandName, AcceptProposePresentation, c.AcceptProposePresentation),
+		cmdutil.NewCommandHandler(CommandName, AcceptProposePresentationV3, c.AcceptProposePresentation),
 		cmdutil.NewCommandHandler(CommandName, DeclineProposePresentation, c.DeclineProposePresentation),
 		cmdutil.NewCommandHandler(CommandName, AcceptPresentation, c.AcceptPresentation),
 		cmdutil.NewCommandHandler(CommandName, DeclinePresentation, c.DeclinePresentation),
@@ -155,21 +183,28 @@ func (c *Command) Actions(rw io.Writer, _ io.Reader) command.Error {
 
 // SendRequestPresentation is used by the Verifier to send a request presentation.
 func (c *Command) SendRequestPresentation(rw io.Writer, req io.Reader) command.Error {
-	var args SendRequestPresentationArgs
+	var (
+		args   SendRequestPresentationArgs
+		err    error
+		errMsg string
+		rec    *connection.Record
+	)
 
-	if err := json.NewDecoder(req).Decode(&args); err != nil {
+	if err = json.NewDecoder(req).Decode(&args); err != nil {
 		logutil.LogInfo(logger, CommandName, SendRequestPresentation, err.Error())
 		return command.NewValidationError(InvalidRequestErrorCode, err)
 	}
 
-	if args.MyDID == "" {
-		logutil.LogDebug(logger, CommandName, SendRequestPresentation, errEmptyMyDID)
-		return command.NewValidationError(InvalidRequestErrorCode, errors.New(errEmptyMyDID))
-	}
+	if args.ConnectionID == "" {
+		if args.MyDID == "" {
+			logutil.LogDebug(logger, CommandName, SendRequestPresentation, errEmptyMyDID)
+			return command.NewValidationError(InvalidRequestErrorCode, errors.New(errEmptyMyDID))
+		}
 
-	if args.TheirDID == "" {
-		logutil.LogDebug(logger, CommandName, SendRequestPresentation, errEmptyTheirDID)
-		return command.NewValidationError(InvalidRequestErrorCode, errors.New(errEmptyTheirDID))
+		if args.TheirDID == "" {
+			logutil.LogDebug(logger, CommandName, SendRequestPresentation, errEmptyTheirDID)
+			return command.NewValidationError(InvalidRequestErrorCode, errors.New(errEmptyTheirDID))
+		}
 	}
 
 	if args.RequestPresentation == nil {
@@ -177,7 +212,20 @@ func (c *Command) SendRequestPresentation(rw io.Writer, req io.Reader) command.E
 		return command.NewValidationError(InvalidRequestErrorCode, errors.New(errEmptyRequestPresentation))
 	}
 
-	piid, err := c.client.SendRequestPresentation(args.RequestPresentation, args.MyDID, args.TheirDID)
+	if args.ConnectionID == "" {
+		rec, err = c.lookup.GetConnectionRecordByDIDs(args.MyDID, args.TheirDID)
+		errMsg = errNoConnectionForDIDs
+	} else {
+		rec, err = c.lookup.GetConnectionRecord(args.ConnectionID)
+		errMsg = errNoConnectionByID
+	}
+
+	if err != nil {
+		logutil.LogDebug(logger, CommandName, SendRequestPresentation, errMsg)
+		return command.NewValidationError(InvalidRequestErrorCode, errors.New(errMsg))
+	}
+
+	piid, err := c.client.SendRequestPresentation(args.RequestPresentation, rec)
 	if err != nil {
 		logutil.LogError(logger, CommandName, SendRequestPresentation, err.Error())
 		return command.NewExecuteError(SendRequestPresentationErrorCode, err)
@@ -194,21 +242,28 @@ func (c *Command) SendRequestPresentation(rw io.Writer, req io.Reader) command.E
 
 // SendProposePresentation is used by the Prover to send a propose presentation.
 func (c *Command) SendProposePresentation(rw io.Writer, req io.Reader) command.Error {
-	var args SendProposePresentationArgs
+	var (
+		args   SendProposePresentationArgs
+		err    error
+		errMsg string
+		rec    *connection.Record
+	)
 
-	if err := json.NewDecoder(req).Decode(&args); err != nil {
+	if err = json.NewDecoder(req).Decode(&args); err != nil {
 		logutil.LogInfo(logger, CommandName, SendProposePresentation, err.Error())
 		return command.NewValidationError(InvalidRequestErrorCode, err)
 	}
 
-	if args.MyDID == "" {
-		logutil.LogDebug(logger, CommandName, SendProposePresentation, errEmptyMyDID)
-		return command.NewValidationError(InvalidRequestErrorCode, errors.New(errEmptyMyDID))
-	}
+	if args.ConnectionID == "" {
+		if args.MyDID == "" {
+			logutil.LogDebug(logger, CommandName, SendProposePresentation, errEmptyMyDID)
+			return command.NewValidationError(InvalidRequestErrorCode, errors.New(errEmptyMyDID))
+		}
 
-	if args.TheirDID == "" {
-		logutil.LogDebug(logger, CommandName, SendProposePresentation, errEmptyTheirDID)
-		return command.NewValidationError(InvalidRequestErrorCode, errors.New(errEmptyTheirDID))
+		if args.TheirDID == "" {
+			logutil.LogDebug(logger, CommandName, SendProposePresentation, errEmptyTheirDID)
+			return command.NewValidationError(InvalidRequestErrorCode, errors.New(errEmptyTheirDID))
+		}
 	}
 
 	if args.ProposePresentation == nil {
@@ -216,7 +271,20 @@ func (c *Command) SendProposePresentation(rw io.Writer, req io.Reader) command.E
 		return command.NewValidationError(InvalidRequestErrorCode, errors.New(errEmptyProposePresentation))
 	}
 
-	piid, err := c.client.SendProposePresentation(args.ProposePresentation, args.MyDID, args.TheirDID)
+	if args.ConnectionID == "" {
+		rec, err = c.lookup.GetConnectionRecordByDIDs(args.MyDID, args.TheirDID)
+		errMsg = errNoConnectionForDIDs
+	} else {
+		rec, err = c.lookup.GetConnectionRecord(args.ConnectionID)
+		errMsg = errNoConnectionByID
+	}
+
+	if err != nil {
+		logutil.LogDebug(logger, CommandName, SendProposePresentation, errMsg)
+		return command.NewValidationError(InvalidRequestErrorCode, errors.New(errMsg))
+	}
+
+	piid, err := c.client.SendProposePresentation(args.ProposePresentation, rec)
 	if err != nil {
 		logutil.LogError(logger, CommandName, SendProposePresentation, err.Error())
 		return command.NewExecuteError(SendProposePresentationErrorCode, err)
@@ -364,7 +432,8 @@ func (c *Command) DeclineProposePresentation(rw io.Writer, req io.Reader) comman
 		return command.NewValidationError(InvalidRequestErrorCode, errors.New(errEmptyPIID))
 	}
 
-	if err := c.client.DeclineProposePresentation(args.PIID, args.Reason); err != nil {
+	if err := c.client.DeclineProposePresentation(args.PIID,
+		presentproof.DeclineReason(args.Reason), presentproof.DeclineRedirect(args.RedirectURL)); err != nil {
 		logutil.LogError(logger, CommandName, DeclineProposePresentation, err.Error())
 		return command.NewExecuteError(DeclineProposePresentationErrorCode, err)
 	}
@@ -390,7 +459,8 @@ func (c *Command) AcceptPresentation(rw io.Writer, req io.Reader) command.Error 
 		return command.NewValidationError(InvalidRequestErrorCode, errors.New(errEmptyPIID))
 	}
 
-	if err := c.client.AcceptPresentation(args.PIID, args.Names...); err != nil {
+	if err := c.client.AcceptPresentation(args.PIID, presentproof.AcceptByRequestingRedirect(args.RedirectURL),
+		presentproof.AcceptByFriendlyNames(args.Names...)); err != nil {
 		logutil.LogError(logger, CommandName, AcceptPresentation, err.Error())
 		return command.NewExecuteError(AcceptPresentationErrorCode, err)
 	}
@@ -442,7 +512,8 @@ func (c *Command) DeclinePresentation(rw io.Writer, req io.Reader) command.Error
 		return command.NewValidationError(InvalidRequestErrorCode, errors.New(errEmptyPIID))
 	}
 
-	if err := c.client.DeclinePresentation(args.PIID, args.Reason); err != nil {
+	if err := c.client.DeclinePresentation(args.PIID,
+		presentproof.DeclineReason(args.Reason), presentproof.DeclineRedirect(args.RedirectURL)); err != nil {
 		logutil.LogError(logger, CommandName, DeclinePresentation, err.Error())
 		return command.NewExecuteError(DeclinePresentationErrorCode, err)
 	}

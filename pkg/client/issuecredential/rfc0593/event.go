@@ -108,16 +108,16 @@ func AutoExecute(p Provider, next chan service.DIDCommAction) func(chan service.
 			)
 
 			switch event.Message.Type() {
-			case issuecredential.ProposeCredentialMsgType:
+			case issuecredential.ProposeCredentialMsgTypeV2:
 				arg, options, err = ReplayProposal(p, event.Message)
 				err = saveOptionsIfNoError(err, db, event.Message, options)
-			case issuecredential.OfferCredentialMsgType:
+			case issuecredential.OfferCredentialMsgTypeV2:
 				arg, options, err = ReplayOffer(p, event.Message)
 				err = saveOptionsIfNoError(err, db, event.Message, options)
-			case issuecredential.RequestCredentialMsgType:
+			case issuecredential.RequestCredentialMsgTypeV2:
 				arg, options, err = IssueCredential(p, event.Message)
 				err = saveOptionsIfNoError(err, db, event.Message, options)
-			case issuecredential.IssueCredentialMsgType:
+			case issuecredential.IssueCredentialMsgTypeV2:
 				// TODO credential issued to us. We have middleware that automatically saves the credentials.
 				//  Should this package ensure it's saved?
 				//  Should we ensure issued VC is up to spec?
@@ -183,7 +183,7 @@ func AutoExecute(p Provider, next chan service.DIDCommAction) func(chan service.
 //     }
 func ReplayProposal(p JSONLDDocumentLoaderProvider,
 	msg service.DIDCommMsg) (interface{}, *CredentialSpecOptions, error) {
-	proposal := &issuecredential.ProposeCredential{}
+	proposal := &issuecredential.ProposeCredentialV2{}
 
 	err := msg.Decode(proposal)
 	if err != nil {
@@ -197,8 +197,8 @@ func ReplayProposal(p JSONLDDocumentLoaderProvider,
 
 	attachID := uuid.New().String()
 
-	return issuecredential.WithOfferCredential(&issuecredential.OfferCredential{
-		Type:    issuecredential.OfferCredentialMsgType,
+	return issuecredential.WithOfferCredentialV2(&issuecredential.OfferCredentialV2{
+		Type:    issuecredential.OfferCredentialMsgTypeV2,
 		Comment: fmt.Sprintf("response to msg id: %s", msg.ID()),
 		Formats: []issuecredential.Format{{
 			AttachID: attachID,
@@ -243,7 +243,7 @@ func ReplayProposal(p JSONLDDocumentLoaderProvider,
 //         }
 //     }
 func ReplayOffer(p JSONLDDocumentLoaderProvider, msg service.DIDCommMsg) (interface{}, *CredentialSpecOptions, error) {
-	offer := &issuecredential.OfferCredential{}
+	offer := &issuecredential.OfferCredentialV2{}
 
 	err := msg.Decode(offer)
 	if err != nil {
@@ -257,8 +257,8 @@ func ReplayOffer(p JSONLDDocumentLoaderProvider, msg service.DIDCommMsg) (interf
 
 	attachID := uuid.New().String()
 
-	return issuecredential.WithRequestCredential(&issuecredential.RequestCredential{
-		Type:    issuecredential.RequestCredentialMsgType,
+	return issuecredential.WithRequestCredentialV2(&issuecredential.RequestCredentialV2{
+		Type:    issuecredential.RequestCredentialMsgTypeV2,
 		Comment: fmt.Sprintf("response to msg id: %s", msg.ID()),
 		Formats: []issuecredential.Format{{
 			AttachID: attachID,
@@ -303,7 +303,7 @@ func ReplayOffer(p JSONLDDocumentLoaderProvider, msg service.DIDCommMsg) (interf
 //         }
 //     }
 func IssueCredential(p Provider, msg service.DIDCommMsg) (interface{}, *CredentialSpecOptions, error) {
-	request := &issuecredential.RequestCredential{}
+	request := &issuecredential.RequestCredentialV2{}
 
 	err := msg.Decode(request)
 	if err != nil {
@@ -322,11 +322,11 @@ func IssueCredential(p Provider, msg service.DIDCommMsg) (interface{}, *Credenti
 
 	ic.Comment = fmt.Sprintf("response to request with id %s", msg.ID())
 
-	return issuecredential.WithIssueCredential(ic), payload.Options, nil
+	return issuecredential.WithIssueCredentialV2(ic), payload.Options, nil
 }
 
 // CreateIssueCredentialMsg creates an issue-credential message using the credential spec.
-func CreateIssueCredentialMsg(p Provider, spec *CredentialSpec) (*issuecredential.IssueCredential, error) {
+func CreateIssueCredentialMsg(p Provider, spec *CredentialSpec) (*issuecredential.IssueCredentialV2, error) {
 	vc, err := verifiable.ParseCredential(
 		spec.Template,
 		verifiable.WithDisabledProofCheck(), // no proof is expected in this credential
@@ -348,8 +348,8 @@ func CreateIssueCredentialMsg(p Provider, spec *CredentialSpec) (*issuecredentia
 
 	attachID := uuid.New().String()
 
-	return &issuecredential.IssueCredential{
-		Type: issuecredential.IssueCredentialMsgType,
+	return &issuecredential.IssueCredentialV2{
+		Type: issuecredential.IssueCredentialMsgTypeV2,
 		Formats: []issuecredential.Format{{
 			AttachID: attachID,
 			Format:   ProofVCFormat,
@@ -405,7 +405,7 @@ func CreateIssueCredentialMsg(p Provider, spec *CredentialSpec) (*issuecredentia
 //     }
 func VerifyCredential(p Provider,
 	options *CredentialSpecOptions, name string, msg service.DIDCommMsg) (interface{}, error) {
-	issueCredential := &issuecredential.IssueCredential{}
+	issueCredential := &issuecredential.IssueCredentialV2{}
 
 	err := msg.Decode(issueCredential)
 	if err != nil {

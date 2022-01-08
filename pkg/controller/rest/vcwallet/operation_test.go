@@ -16,6 +16,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
@@ -24,17 +25,22 @@ import (
 	outofbandClient "github.com/hyperledger/aries-framework-go/pkg/client/outofband"
 	"github.com/hyperledger/aries-framework-go/pkg/controller/command/vcwallet"
 	"github.com/hyperledger/aries-framework-go/pkg/crypto/tinkcrypto"
+	"github.com/hyperledger/aries-framework-go/pkg/didcomm/common/model"
 	"github.com/hyperledger/aries-framework-go/pkg/didcomm/common/service"
 	"github.com/hyperledger/aries-framework-go/pkg/didcomm/protocol/didexchange"
+	issuecredentialsvc "github.com/hyperledger/aries-framework-go/pkg/didcomm/protocol/issuecredential"
 	"github.com/hyperledger/aries-framework-go/pkg/didcomm/protocol/mediator"
 	outofbandSvc "github.com/hyperledger/aries-framework-go/pkg/didcomm/protocol/outofband"
+	oobv2 "github.com/hyperledger/aries-framework-go/pkg/didcomm/protocol/outofbandv2"
 	presentproofSvc "github.com/hyperledger/aries-framework-go/pkg/didcomm/protocol/presentproof"
 	"github.com/hyperledger/aries-framework-go/pkg/doc/did"
 	"github.com/hyperledger/aries-framework-go/pkg/doc/verifiable"
 	vdrapi "github.com/hyperledger/aries-framework-go/pkg/framework/aries/api/vdr"
+	mockoutofbandv2 "github.com/hyperledger/aries-framework-go/pkg/internal/gomocks/client/outofbandv2"
 	"github.com/hyperledger/aries-framework-go/pkg/internal/ldtestutil"
 	"github.com/hyperledger/aries-framework-go/pkg/kms"
 	mockdidexchange "github.com/hyperledger/aries-framework-go/pkg/mock/didcomm/protocol/didexchange"
+	mockissuecredential "github.com/hyperledger/aries-framework-go/pkg/mock/didcomm/protocol/issuecredential"
 	mockmediator "github.com/hyperledger/aries-framework-go/pkg/mock/didcomm/protocol/mediator"
 	mockoutofband "github.com/hyperledger/aries-framework-go/pkg/mock/didcomm/protocol/outofband"
 	mockpresentproof "github.com/hyperledger/aries-framework-go/pkg/mock/didcomm/protocol/presentproof"
@@ -244,6 +250,9 @@ const (
             ]
         }
     }`
+	webRedirectStatusKey = "status"
+	webRedirectURLKey    = "url"
+	exampleWebRedirect   = "http://example.com/sample"
 )
 
 func TestNew(t *testing.T) {
@@ -251,7 +260,7 @@ func TestNew(t *testing.T) {
 		cmd := New(newMockProvider(t), &vcwallet.Config{})
 		require.NotNil(t, cmd)
 
-		require.Len(t, cmd.GetRESTHandlers(), 18)
+		require.Len(t, cmd.GetRESTHandlers(), 20)
 	})
 }
 
@@ -1525,7 +1534,7 @@ func TestOperation_ProposePresentation(t *testing.T) {
 				return []presentproofSvc.Action{
 					{
 						PIID: thID,
-						Msg: service.NewDIDCommMsgMap(&presentproofSvc.RequestPresentation{
+						Msg: service.NewDIDCommMsgMap(&presentproofSvc.RequestPresentationV2{
 							Comment: "mock msg",
 						}),
 						MyDID:    myDID,
@@ -1555,10 +1564,10 @@ func TestOperation_ProposePresentation(t *testing.T) {
 
 		request := &vcwallet.ProposePresentationRequest{
 			WalletAuth: vcwallet.WalletAuth{UserID: sampleDIDCommUser, Auth: token},
-			Invitation: &outofbandClient.Invitation{},
+			Invitation: &wallet.GenericInvitation{},
 		}
 
-		rq := httptest.NewRequest(http.MethodPost, ConnectPath, getReader(t, request))
+		rq := httptest.NewRequest(http.MethodPost, ProposeCredentialPath, getReader(t, request))
 		rw := httptest.NewRecorder()
 
 		cmd := New(mockctx, &vcwallet.Config{})
@@ -1583,7 +1592,7 @@ func TestOperation_ProposePresentation(t *testing.T) {
 
 		request := &vcwallet.ProposePresentationRequest{
 			WalletAuth: vcwallet.WalletAuth{UserID: sampleDIDCommUser, Auth: token},
-			Invitation: &outofbandClient.Invitation{},
+			Invitation: &wallet.GenericInvitation{},
 		}
 
 		rq := httptest.NewRequest(http.MethodPost, ProposePresentationPath, getReader(t, request))
@@ -1613,6 +1622,50 @@ func TestOperation_PresentProof(t *testing.T) {
 
 	defer lock()
 
+	t.Run("wallet present proof success - wait for done", func(t *testing.T) {
+		thID := uuid.New().String()
+		mockPresentProofSvc := &mockpresentproof.MockPresentProofSvc{
+			RegisterMsgEventHandle: func(ch chan<- service.StateMsg) error {
+				ch <- service.StateMsg{
+					Type:    service.PostState,
+					StateID: presentproofSvc.StateNameDone,
+					Properties: &mockdidexchange.MockEventProperties{
+						Properties: map[string]interface{}{
+							webRedirectStatusKey: model.AckStatusOK,
+							webRedirectURLKey:    exampleWebRedirect,
+						},
+					},
+					Msg: &mockMsg{thID: thID},
+				}
+
+				return nil
+			},
+		}
+		mockctx.ServiceMap[presentproofSvc.Name] = mockPresentProofSvc
+
+		request := &vcwallet.PresentProofRequest{
+			WalletAuth:   vcwallet.WalletAuth{UserID: sampleDIDCommUser, Auth: token},
+			ThreadID:     thID,
+			Presentation: json.RawMessage{},
+			WaitForDone:  true,
+			Timeout:      1 * time.Millisecond,
+		}
+
+		rq := httptest.NewRequest(http.MethodPost, PresentProofPath, getReader(t, request))
+		rw := httptest.NewRecorder()
+
+		cmd := New(mockctx, &vcwallet.Config{})
+		cmd.PresentProof(rw, rq)
+		require.Equal(t, http.StatusOK, rw.Code)
+
+		var r presentProofResponse
+		require.NoError(t, json.NewDecoder(rw.Body).Decode(&r.Response))
+		require.NotEmpty(t, r)
+		require.NotEmpty(t, r.Response)
+		require.Equal(t, model.AckStatusOK, r.Response.Status)
+		require.NotEmpty(t, exampleWebRedirect, r.Response.RedirectURL)
+	})
+
 	t.Run("wallet present proof success", func(t *testing.T) {
 		request := &vcwallet.PresentProofRequest{
 			WalletAuth:   vcwallet.WalletAuth{UserID: sampleDIDCommUser, Auth: token},
@@ -1630,7 +1683,7 @@ func TestOperation_PresentProof(t *testing.T) {
 
 	t.Run("wallet present proof failure", func(t *testing.T) {
 		ppSvc := &mockpresentproof.MockPresentProofSvc{
-			ActionContinueFunc: func(string, presentproofSvc.Opt) error {
+			ActionContinueFunc: func(string, ...presentproofSvc.Opt) error {
 				return fmt.Errorf(sampleCommandError)
 			},
 		}
@@ -1648,6 +1701,235 @@ func TestOperation_PresentProof(t *testing.T) {
 
 		cmd := New(mockctx, &vcwallet.Config{})
 		cmd.PresentProof(rw, rq)
+		require.Equal(t, rw.Code, http.StatusInternalServerError)
+		require.Contains(t, rw.Body.String(), sampleCommandError)
+	})
+}
+
+func TestOperation_ProposeCredential(t *testing.T) {
+	const (
+		sampleDIDCommUser = "sample-didcomm-user02"
+		sampleMsgComment  = "sample mock msg"
+		myDID             = "did:mydid:123"
+		theirDID          = "did:theirdid:123"
+	)
+
+	mockctx := newMockProvider(t)
+
+	createSampleUserProfile(t, mockctx, &vcwallet.CreateOrUpdateProfileRequest{
+		UserID:             sampleDIDCommUser,
+		LocalKMSPassphrase: samplePassPhrase,
+	})
+
+	token, lock := unlockWallet(t, mockctx, &vcwallet.UnlockWalletRequest{
+		UserID:             sampleDIDCommUser,
+		LocalKMSPassphrase: samplePassPhrase,
+	})
+
+	defer lock()
+
+	t.Run("wallet propose credential success", func(t *testing.T) {
+		sampleConnID := uuid.New().String()
+		oobSvc := &mockoutofband.MockOobService{
+			AcceptInvitationHandle: func(*outofbandSvc.Invitation, outofbandSvc.Options) (string, error) {
+				return sampleConnID, nil
+			},
+		}
+		mockctx.ServiceMap[outofbandSvc.Name] = oobSvc
+
+		didexSvc := &mockdidexchange.MockDIDExchangeSvc{
+			RegisterMsgEventHandle: func(ch chan<- service.StateMsg) error {
+				ch <- service.StateMsg{
+					Type:       service.PostState,
+					StateID:    didexchange.StateIDCompleted,
+					Properties: &mockdidexchange.MockEventProperties{ConnID: sampleConnID},
+				}
+
+				return nil
+			},
+		}
+		mockctx.ServiceMap[didexchange.DIDExchange] = didexSvc
+
+		thID := uuid.New().String()
+		icSvc := &mockissuecredential.MockIssueCredentialSvc{
+			ActionsFunc: func() ([]issuecredentialsvc.Action, error) {
+				return []issuecredentialsvc.Action{
+					{
+						PIID: thID,
+						Msg: service.NewDIDCommMsgMap(&issuecredentialsvc.OfferCredentialV2{
+							Comment: sampleMsgComment,
+						}),
+						MyDID:    myDID,
+						TheirDID: theirDID,
+					},
+				}, nil
+			},
+			HandleFunc: func(service.DIDCommMsg) (string, error) {
+				return thID, nil
+			},
+		}
+		mockctx.ServiceMap[issuecredentialsvc.Name] = icSvc
+
+		store, err := mockctx.StorageProvider().OpenStore(connection.Namespace)
+		require.NoError(t, err)
+
+		record := &connection.Record{
+			ConnectionID: sampleConnID,
+			MyDID:        myDID,
+			TheirDID:     theirDID,
+		}
+		recordBytes, err := json.Marshal(record)
+		require.NoError(t, err)
+		require.NoError(t, store.Put(fmt.Sprintf("conn_%s", sampleConnID), recordBytes))
+
+		request := &vcwallet.ProposeCredentialRequest{
+			WalletAuth: vcwallet.WalletAuth{UserID: sampleDIDCommUser, Auth: token},
+			Invitation: &wallet.GenericInvitation{},
+		}
+
+		rq := httptest.NewRequest(http.MethodPost, ProposeCredentialPath, getReader(t, request))
+		rw := httptest.NewRecorder()
+
+		cmd := New(mockctx, &vcwallet.Config{})
+		cmd.ProposeCredential(rw, rq)
+		require.Equal(t, rw.Code, http.StatusOK)
+
+		var r proposeCredentialResponse
+		require.NoError(t, json.NewDecoder(rw.Body).Decode(&r.Response))
+		require.NotEmpty(t, r)
+		require.NotEmpty(t, r.Response)
+		require.NotEmpty(t, r.Response.OfferCredential)
+
+		offer := &issuecredentialsvc.OfferCredentialV2{}
+
+		err = r.Response.OfferCredential.Decode(offer)
+		require.NoError(t, err)
+		require.NotEmpty(t, offer)
+		require.Equal(t, sampleMsgComment, offer.Comment)
+	})
+
+	t.Run("wallet propose credential failure", func(t *testing.T) {
+		oobSvc := &mockoutofband.MockOobService{
+			AcceptInvitationHandle: func(*outofbandSvc.Invitation, outofbandSvc.Options) (string, error) {
+				return "", fmt.Errorf(sampleCommandError)
+			},
+		}
+
+		mockctx.ServiceMap[outofbandSvc.Name] = oobSvc
+
+		request := &vcwallet.ProposeCredentialRequest{
+			WalletAuth: vcwallet.WalletAuth{UserID: sampleDIDCommUser, Auth: token},
+			Invitation: &wallet.GenericInvitation{},
+		}
+
+		rq := httptest.NewRequest(http.MethodPost, ProposeCredentialPath, getReader(t, request))
+		rw := httptest.NewRecorder()
+
+		cmd := New(mockctx, &vcwallet.Config{})
+		cmd.ProposeCredential(rw, rq)
+		require.Equal(t, rw.Code, http.StatusInternalServerError)
+		require.Contains(t, rw.Body.String(), sampleCommandError)
+	})
+}
+
+func TestOperation_RequestCredential(t *testing.T) {
+	const (
+		sampleDIDCommUser = "sample-didcomm-user03"
+	)
+
+	mockctx := newMockProvider(t)
+
+	createSampleUserProfile(t, mockctx, &vcwallet.CreateOrUpdateProfileRequest{
+		UserID:             sampleDIDCommUser,
+		LocalKMSPassphrase: samplePassPhrase,
+	})
+
+	token, lock := unlockWallet(t, mockctx, &vcwallet.UnlockWalletRequest{
+		UserID:             sampleDIDCommUser,
+		LocalKMSPassphrase: samplePassPhrase,
+	})
+
+	defer lock()
+
+	t.Run("wallet request credential success - wait for done", func(t *testing.T) {
+		thID := uuid.New().String()
+
+		icSvc := &mockissuecredential.MockIssueCredentialSvc{
+			RegisterMsgEventHandle: func(ch chan<- service.StateMsg) error {
+				ch <- service.StateMsg{
+					Type:    service.PostState,
+					StateID: "done",
+					Properties: &mockdidexchange.MockEventProperties{
+						Properties: map[string]interface{}{
+							webRedirectStatusKey: model.AckStatusOK,
+							webRedirectURLKey:    exampleWebRedirect,
+						},
+					},
+					Msg: &mockMsg{thID: thID},
+				}
+
+				return nil
+			},
+		}
+		mockctx.ServiceMap[issuecredentialsvc.Name] = icSvc
+
+		request := &vcwallet.RequestCredentialRequest{
+			WalletAuth:   vcwallet.WalletAuth{UserID: sampleDIDCommUser, Auth: token},
+			ThreadID:     thID,
+			Presentation: json.RawMessage{},
+			WaitForDone:  true,
+			Timeout:      600 * time.Millisecond,
+		}
+
+		rq := httptest.NewRequest(http.MethodPost, PresentProofPath, getReader(t, request))
+		rw := httptest.NewRecorder()
+
+		cmd := New(mockctx, &vcwallet.Config{})
+		cmd.RequestCredential(rw, rq)
+		require.Equal(t, http.StatusOK, rw.Code)
+
+		var r requestCredentialResponse
+		require.NoError(t, json.NewDecoder(rw.Body).Decode(&r.Response))
+		require.NotEmpty(t, r)
+		require.NotEmpty(t, r.Response)
+		require.Equal(t, model.AckStatusOK, r.Response.Status)
+		require.NotEmpty(t, exampleWebRedirect, r.Response.RedirectURL)
+	})
+
+	t.Run("wallet request credential success", func(t *testing.T) {
+		request := &vcwallet.RequestCredentialRequest{
+			WalletAuth:   vcwallet.WalletAuth{UserID: sampleDIDCommUser, Auth: token},
+			ThreadID:     uuid.New().String(),
+			Presentation: json.RawMessage{},
+		}
+
+		rq := httptest.NewRequest(http.MethodPost, PresentProofPath, getReader(t, request))
+		rw := httptest.NewRecorder()
+
+		cmd := New(mockctx, &vcwallet.Config{})
+		cmd.RequestCredential(rw, rq)
+		require.Equal(t, rw.Code, http.StatusOK)
+	})
+
+	t.Run("wallet request credential failure", func(t *testing.T) {
+		icSvc := &mockissuecredential.MockIssueCredentialSvc{
+			ActionContinueFunc: func(string, ...issuecredentialsvc.Opt) error {
+				return fmt.Errorf(sampleCommandError)
+			},
+		}
+		mockctx.ServiceMap[issuecredentialsvc.Name] = icSvc
+
+		request := &vcwallet.PresentProofRequest{
+			WalletAuth:   vcwallet.WalletAuth{UserID: sampleDIDCommUser, Auth: token},
+			ThreadID:     uuid.New().String(),
+			Presentation: json.RawMessage{},
+		}
+
+		rq := httptest.NewRequest(http.MethodPost, PresentProofPath, getReader(t, request))
+		rw := httptest.NewRecorder()
+
+		cmd := New(mockctx, &vcwallet.Config{})
+		cmd.RequestCredential(rw, rq)
 		require.Equal(t, rw.Code, http.StatusInternalServerError)
 		require.Contains(t, rw.Body.String(), sampleCommandError)
 	})
@@ -1714,6 +1996,8 @@ func newMockProvider(t *testing.T) *mockprovider.Provider {
 		outofbandSvc.Name:       &mockoutofband.MockOobService{},
 		didexchange.DIDExchange: &mockdidexchange.MockDIDExchangeSvc{},
 		mediator.Coordination:   &mockmediator.MockMediatorSvc{},
+		issuecredentialsvc.Name: &mockissuecredential.MockIssueCredentialSvc{},
+		oobv2.Name:              &mockoutofbandv2.MockOobService{},
 	}
 
 	return &mockprovider.Provider{
@@ -1775,4 +2059,18 @@ func parsePresentation(t *testing.T, b *bytes.Buffer) *verifiable.Presentation {
 	require.NoError(t, err)
 
 	return vp
+}
+
+// mockMsg containing custom parent thread ID.
+type mockMsg struct {
+	*service.DIDCommMsgMap
+	thID string
+}
+
+func (m *mockMsg) ParentThreadID() string {
+	return m.thID
+}
+
+func (m *mockMsg) ThreadID() (string, error) {
+	return m.thID, nil
 }

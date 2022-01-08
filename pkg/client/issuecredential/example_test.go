@@ -21,6 +21,7 @@ import (
 	dispatchermocks "github.com/hyperledger/aries-framework-go/pkg/internal/gomocks/didcomm/dispatcher"
 	messengermocks "github.com/hyperledger/aries-framework-go/pkg/internal/gomocks/didcomm/messenger"
 	protocolmocks "github.com/hyperledger/aries-framework-go/pkg/internal/gomocks/didcomm/protocol/presentproof"
+	"github.com/hyperledger/aries-framework-go/pkg/store/connection"
 )
 
 // payload represents a transport message structure.
@@ -145,7 +146,7 @@ func ExampleClient_SendOffer() {
 			case e := <-actionsAlice:
 				acceptErr = clientAlice.AcceptRequest(e.Properties.All()["piid"].(string), &IssueCredential{})
 			case e := <-actionsBob:
-				acceptErr = clientBob.AcceptOffer(e.Properties.All()["piid"].(string))
+				acceptErr = clientBob.AcceptOffer(e.Properties.All()["piid"].(string), &RequestCredential{})
 			}
 
 			if acceptErr != nil {
@@ -159,7 +160,7 @@ func ExampleClient_SendOffer() {
 	// Bob.
 	waitForBob := waitForFn(clientBob)
 
-	_, err = clientAlice.SendOffer(&OfferCredential{}, Alice, Bob)
+	_, err = clientAlice.SendOffer(&OfferCredential{}, &connection.Record{MyDID: Alice, TheirDID: Bob})
 	if err != nil {
 		fmt.Println(err)
 	}
@@ -225,19 +226,19 @@ func ExampleClient_SendProposal() {
 				fmt.Println("empty piid")
 			}
 
-			if e.Message.Type() == issuecredential.ProposeCredentialMsgType {
+			if e.Message.Type() == issuecredential.ProposeCredentialMsgTypeV2 {
 				acceptErr = clientAlice.AcceptProposal(piid, &OfferCredential{})
 			}
 
-			if e.Message.Type() == issuecredential.RequestCredentialMsgType {
+			if e.Message.Type() == issuecredential.RequestCredentialMsgTypeV2 {
 				acceptErr = clientAlice.AcceptRequest(piid, &IssueCredential{})
 			}
 
-			if e.Message.Type() == issuecredential.OfferCredentialMsgType {
-				acceptErr = clientBob.AcceptOffer(piid)
+			if e.Message.Type() == issuecredential.OfferCredentialMsgTypeV2 {
+				acceptErr = clientBob.AcceptOffer(piid, &RequestCredential{})
 			}
 
-			if e.Message.Type() == issuecredential.IssueCredentialMsgType {
+			if e.Message.Type() == issuecredential.IssueCredentialMsgTypeV2 {
 				acceptErr = clientBob.AcceptCredential(piid)
 			}
 
@@ -252,7 +253,7 @@ func ExampleClient_SendProposal() {
 	// Bob.
 	waitForBob := waitForFn(clientBob)
 
-	_, err = clientBob.SendProposal(&ProposeCredential{}, Bob, Alice)
+	_, err = clientBob.SendProposal(&ProposeCredential{}, &connection.Record{MyDID: Bob, TheirDID: Alice})
 	if err != nil {
 		fmt.Println(err)
 	}
@@ -324,7 +325,7 @@ func ExampleClient_SendRequest() {
 	// Bob.
 	waitForBob := waitForFn(clientBob)
 
-	_, err = clientBob.SendRequest(&RequestCredential{}, Bob, Alice)
+	_, err = clientBob.SendRequest(&RequestCredential{}, &connection.Record{MyDID: Bob, TheirDID: Alice})
 	if err != nil {
 		fmt.Println(err)
 	}

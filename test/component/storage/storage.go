@@ -9,6 +9,7 @@ SPDX-License-Identifier: Apache-2.0
 package storage
 
 import (
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -374,8 +375,6 @@ func TestPutGet(t *testing.T, provider spi.Provider) { //nolint: funlen // Test 
 
 	testValueSimpleString := "TestValue"
 	testValueSimpleString2 := "TestValue2"
-	testValueJSON := `{"someKey1":"someStringValue","someKey2":3,"someKey3":true}`
-	testValueJSON2 := `{"someKey1":"someStringValue2","someKey2":3,"someKey3":true}`
 	testBinaryData := []byte{0x5f, 0xcb, 0x5c, 0xe9, 0x7f, 0xe3, 0x81}
 	testBinaryData2 := []byte{0x5f, 0xcb, 0x5c, 0xe9, 0x7f}
 	testValueJSONString := `"TestValue"`
@@ -386,7 +385,7 @@ func TestPutGet(t *testing.T, provider spi.Provider) { //nolint: funlen // Test 
 				doPutThenGetTest(t, provider, testKeyNonURL, []byte(testValueSimpleString))
 			})
 			t.Run("Value is JSON-formatted object", func(t *testing.T) {
-				doPutThenGetTest(t, provider, testKeyNonURL, []byte(testValueJSON))
+				doPutThenGetTestWithJSONFormattedObject(t, provider, testKeyNonURL)
 			})
 			t.Run("Value is JSON-formatted string", func(t *testing.T) {
 				doPutThenGetTest(t, provider, testKeyNonURL, []byte(testValueJSONString))
@@ -399,8 +398,11 @@ func TestPutGet(t *testing.T, provider spi.Provider) { //nolint: funlen // Test 
 			t.Run("Value is simple text", func(t *testing.T) {
 				doPutThenGetTest(t, provider, testKeyURL, []byte(testValueSimpleString))
 			})
-			t.Run("Value is JSON-formatted text", func(t *testing.T) {
-				doPutThenGetTest(t, provider, testKeyURL, []byte(testValueJSON))
+			t.Run("Value is JSON-formatted object", func(t *testing.T) {
+				doPutThenGetTestWithJSONFormattedObject(t, provider, testKeyURL)
+			})
+			t.Run("Value is JSON-formatted string", func(t *testing.T) {
+				doPutThenGetTest(t, provider, testKeyURL, []byte(testValueJSONString))
 			})
 			t.Run("Value is binary data", func(t *testing.T) {
 				doPutThenGetTest(t, provider, testKeyURL, testBinaryData)
@@ -413,8 +415,8 @@ func TestPutGet(t *testing.T, provider spi.Provider) { //nolint: funlen // Test 
 				doPutThenUpdateThenGetTest(t, provider, testKeyNonURL,
 					[]byte(testValueSimpleString), []byte(testValueSimpleString2))
 			})
-			t.Run("Value is JSON-formatted text", func(t *testing.T) {
-				doPutThenUpdateThenGetTest(t, provider, testKeyNonURL, []byte(testValueJSON), []byte(testValueJSON2))
+			t.Run("Value is JSON-formatted object", func(t *testing.T) {
+				doPutThenUpdateThenGetTestWithJSONFormattedObject(t, provider, testKeyNonURL)
 			})
 			t.Run("Value is binary data", func(t *testing.T) {
 				doPutThenUpdateThenGetTest(t, provider, testKeyNonURL, testBinaryData, testBinaryData2)
@@ -425,8 +427,8 @@ func TestPutGet(t *testing.T, provider spi.Provider) { //nolint: funlen // Test 
 				doPutThenUpdateThenGetTest(t, provider, testKeyURL, []byte(testValueSimpleString),
 					[]byte(testValueSimpleString2))
 			})
-			t.Run("Value is JSON-formatted text", func(t *testing.T) {
-				doPutThenUpdateThenGetTest(t, provider, testKeyURL, []byte(testValueJSON), []byte(testValueJSON2))
+			t.Run("Value is JSON-formatted object", func(t *testing.T) {
+				doPutThenUpdateThenGetTestWithJSONFormattedObject(t, provider, testKeyURL)
 			})
 			t.Run("Value is binary data", func(t *testing.T) {
 				doPutThenUpdateThenGetTest(t, provider, testKeyURL, testBinaryData, testBinaryData2)
@@ -1046,55 +1048,8 @@ func TestStoreQueryWithSortingAndInitialPageOptions(t *testing.T, provider spi.P
 // TestStoreBatch tests common Store Batch functionality.
 func TestStoreBatch(t *testing.T, provider spi.Provider) { // nolint:funlen // Test file
 	t.Run("Success: put three new values", func(t *testing.T) {
-		storeName := randomStoreName()
-
-		store, err := provider.OpenStore(storeName)
-		require.NoError(t, err)
-		require.NotNil(t, store)
-
-		defer func() {
-			require.NoError(t, store.Close())
-		}()
-
-		err = provider.SetStoreConfig(storeName,
-			spi.StoreConfiguration{TagNames: []string{"tagName1", "tagName2", "tagName3"}})
-		require.NoError(t, err)
-
-		key1TagsToStore := []spi.Tag{{Name: "tagName1"}}
-		key2TagsToStore := []spi.Tag{{Name: "tagName2"}}
-		key3TagsToStore := []spi.Tag{{Name: "tagName3"}}
-
-		operations := []spi.Operation{
-			{Key: "key1", Value: []byte("value1"), Tags: key1TagsToStore},
-			{Key: "key2", Value: []byte(`{"field":"value"}`), Tags: key2TagsToStore},
-			{Key: "key3", Value: []byte(`"value3"`), Tags: key3TagsToStore},
-		}
-
-		err = store.Batch(operations)
-		require.NoError(t, err)
-
-		// Check and make sure all values and tags were stored
-
-		value, err := store.Get("key1")
-		require.NoError(t, err)
-		require.Equal(t, "value1", string(value))
-		retrievedTags, err := store.GetTags("key1")
-		require.True(t, equalTags(key1TagsToStore, retrievedTags), "Got unexpected tags")
-		require.NoError(t, err)
-
-		value, err = store.Get("key2")
-		require.NoError(t, err)
-		require.Equal(t, `{"field":"value"}`, string(value))
-		retrievedTags, err = store.GetTags("key2")
-		require.True(t, equalTags(key2TagsToStore, retrievedTags), "Got unexpected tags")
-		require.NoError(t, err)
-
-		value, err = store.Get("key3")
-		require.NoError(t, err)
-		require.Equal(t, `"value3"`, string(value))
-		retrievedTags, err = store.GetTags("key3")
-		require.True(t, equalTags(key3TagsToStore, retrievedTags), "Got unexpected tags")
-		require.NoError(t, err)
+		doBatchTestPutThreeValues(t, provider, false)
+		doBatchTestPutThreeValues(t, provider, true)
 	})
 	t.Run("Success: update three different previously-stored values", func(t *testing.T) {
 		storeName := randomStoreName()
@@ -1216,59 +1171,8 @@ func TestStoreBatch(t *testing.T, provider spi.Provider) { // nolint:funlen // T
 		require.Nil(t, tags)
 	})
 	t.Run("Success: put one value, update one value, delete one value", func(t *testing.T) {
-		storeName := randomStoreName()
-
-		store, err := provider.OpenStore(storeName)
-		require.NoError(t, err)
-		require.NotNil(t, store)
-
-		defer func() {
-			require.NoError(t, store.Close())
-		}()
-
-		err = provider.SetStoreConfig(storeName,
-			spi.StoreConfiguration{TagNames: []string{"tagName1", "tagName2", "tagName3"}})
-		require.NoError(t, err)
-
-		err = store.Put("key1", []byte("value1"), []spi.Tag{{Name: "tagName1", Value: "tagValue1"}}...)
-		require.NoError(t, err)
-
-		err = store.Put("key2", []byte("value2"), []spi.Tag{{Name: "tagName2", Value: "tagValue2"}}...)
-		require.NoError(t, err)
-
-		key3TagsToStore := []spi.Tag{{Name: "tagName3", Value: "tagValue3"}}
-
-		key1UpdatedTagsToStore := []spi.Tag{{Name: "tagName1"}}
-
-		operations := []spi.Operation{
-			{Key: "key3", Value: []byte("value3"), Tags: key3TagsToStore},            // Put
-			{Key: "key1", Value: []byte("value1_new"), Tags: key1UpdatedTagsToStore}, // Update
-			{Key: "key2", Value: nil, Tags: nil},                                     // Delete
-		}
-
-		err = store.Batch(operations)
-		require.NoError(t, err)
-
-		value, err := store.Get("key3")
-		require.NoError(t, err)
-		require.Equal(t, "value3", string(value))
-		retrievedTags, err := store.GetTags("key3")
-		require.True(t, equalTags(key3TagsToStore, retrievedTags), "Got unexpected tags")
-		require.NoError(t, err)
-
-		value, err = store.Get("key1")
-		require.NoError(t, err)
-		require.Equal(t, "value1_new", string(value))
-		retrievedTags, err = store.GetTags("key1")
-		require.True(t, equalTags(key1UpdatedTagsToStore, retrievedTags), "Got unexpected tags")
-		require.NoError(t, err)
-
-		value, err = store.Get("key2")
-		require.True(t, errors.Is(err, spi.ErrDataNotFound), "got unexpected error or no error")
-		require.Nil(t, value)
-		retrievedTags, err = store.GetTags("key2")
-		require.True(t, errors.Is(err, spi.ErrDataNotFound), "got unexpected error or no error")
-		require.Nil(t, retrievedTags)
+		doBatchTestPutOneUpdateOneDeleteOne(t, provider, false)
+		doBatchTestPutOneUpdateOneDeleteOne(t, provider, false)
 	})
 	t.Run("Success: delete three values, only two of which were previously-stored", func(t *testing.T) {
 		storeName := randomStoreName()
@@ -1652,6 +1556,55 @@ func doPutThenGetTest(t *testing.T, provider spi.Provider, key string, value []b
 	require.Equal(t, value, retrievedValue)
 }
 
+type testStruct struct {
+	String string `json:"string"`
+
+	Test1Bool bool `json:"test1Bool"`
+	Test2Bool bool `json:"test2Bool"`
+
+	BigNegativeInt32   int32 `json:"bigNegativeInt32"`
+	SmallNegativeInt32 int32 `json:"smallNegativeInt32"`
+	ZeroInt32          int32 `json:"zeroInt32"`
+	SmallPositiveInt32 int32 `json:"smallPositiveInt32"`
+	BigPositiveInt32   int32 `json:"bigPositiveInt32"`
+
+	BigNegativeInt64   int64 `json:"bigNegativeInt64"`
+	SmallNegativeInt64 int64 `json:"smallNegativeInt64"`
+	ZeroInt64          int64 `json:"zeroInt64"`
+	SmallPositiveInt64 int64 `json:"smallPositiveInt64"`
+	BigPositiveInt64   int64 `json:"bigPositiveInt64"`
+
+	Test1Float32 float32 `json:"test1Float32"`
+	Test2Float32 float32 `json:"test2Float32"`
+	Test3Float32 float32 `json:"test3Float32"`
+	Test4Float32 float32 `json:"test4Float32"`
+	Test5Float32 float32 `json:"test5Float32"`
+	ZeroFloat32  float32 `json:"zeroFloat32"`
+
+	Test1Float64 float64 `json:"test1Float64"`
+	Test2Float64 float64 `json:"test2Float64"`
+	Test3Float64 float64 `json:"test3Float64"`
+	Test4Float64 float64 `json:"test4Float64"`
+	Test5Float64 float32 `json:"test5Float64"`
+	ZeroFloat64  float64 `json:"zeroFloat64"`
+}
+
+func doPutThenGetTestWithJSONFormattedObject(t *testing.T, provider spi.Provider, key string) {
+	store, err := provider.OpenStore(randomStoreName())
+	require.NoError(t, err)
+
+	defer func() {
+		require.NoError(t, store.Close())
+	}()
+
+	storedTestData := storeTestJSONData(t, store, key)
+
+	retrievedValue, err := store.Get(key)
+	require.NoError(t, err)
+
+	checkIfTestStructsMatch(t, retrievedValue, &storedTestData)
+}
+
 func doPutThenUpdateThenGetTest(t *testing.T, provider spi.Provider, key string, value, updatedValue []byte) {
 	store, err := provider.OpenStore(randomStoreName())
 	require.NoError(t, err)
@@ -1669,6 +1622,114 @@ func doPutThenUpdateThenGetTest(t *testing.T, provider spi.Provider, key string,
 	retrievedValue, err := store.Get(key)
 	require.NoError(t, err)
 	require.Equal(t, updatedValue, retrievedValue)
+}
+
+func doPutThenUpdateThenGetTestWithJSONFormattedObject(t *testing.T, provider spi.Provider, key string) {
+	store, err := provider.OpenStore(randomStoreName())
+	require.NoError(t, err)
+
+	defer func() {
+		require.NoError(t, store.Close())
+	}()
+
+	storedTestData := storeTestJSONData(t, store, key)
+
+	storedTestData.String = "Some new string here"
+	storedTestData.Test1Bool = true
+	storedTestData.BigNegativeInt32 = -12345 //nolint:gomnd // Test file
+	storedTestData.BigPositiveInt64 = 90000004
+	storedTestData.Test3Float32 = 7.42
+	storedTestData.Test3Float64 = -72.4208 //nolint:gomnd // Test file
+
+	testDataBytes, err := json.Marshal(storedTestData)
+	require.NoError(t, err)
+
+	err = store.Put(key, testDataBytes)
+	require.NoError(t, err)
+
+	retrievedValue, err := store.Get(key)
+	require.NoError(t, err)
+
+	checkIfTestStructsMatch(t, retrievedValue, &storedTestData)
+}
+
+func storeTestJSONData(t *testing.T, store spi.Store, key string) testStruct {
+	testData := testStruct{
+		String: "Some string here",
+
+		Test1Bool: false,
+		Test2Bool: true,
+
+		BigNegativeInt32:   -2147483648,
+		SmallNegativeInt32: -3,
+		ZeroInt32:          0,
+		SmallPositiveInt32: 3,          //nolint:gomnd // Test file
+		BigPositiveInt32:   2147483647, //nolint:gomnd // Test file
+
+		BigNegativeInt64:   -9223372036854775808,
+		SmallNegativeInt64: -3,
+		ZeroInt64:          0,
+		SmallPositiveInt64: 3,                   //nolint:gomnd // Test file
+		BigPositiveInt64:   9223372036854775807, //nolint:gomnd // Test file
+
+		Test1Float32: 1.3,
+		Test2Float32: 16, //nolint:gomnd // Test file
+		Test3Float32: 1.5869797,
+		Test4Float32: 239.902, //nolint:gomnd // Test file
+		Test5Float32: -239.902,
+		ZeroFloat32:  0.00, //nolint:gomnd // Test file
+
+		Test1Float64: 0.12345678912345678, //nolint:gomnd // Test file
+		Test2Float64: -478.875321,
+		Test3Float64: 123456789, //nolint:gomnd // Test file
+		Test4Float64: 1.00000004,
+		Test5Float64: -239.902,
+		ZeroFloat64:  0.0000, //nolint:gomnd // Test file
+	}
+
+	testDataBytes, err := json.Marshal(testData)
+	require.NoError(t, err)
+
+	err = store.Put(key, testDataBytes)
+	require.NoError(t, err)
+
+	return testData
+}
+
+func checkIfTestStructsMatch(t *testing.T, retrievedValue []byte, storedTestData *testStruct) {
+	var retrievedTestData testStruct
+
+	err := json.Unmarshal(retrievedValue, &retrievedTestData)
+	require.NoError(t, err)
+
+	require.Equal(t, storedTestData.String, retrievedTestData.String)
+
+	require.Equal(t, storedTestData.Test1Bool, retrievedTestData.Test1Bool)
+	require.Equal(t, storedTestData.Test2Bool, retrievedTestData.Test2Bool)
+
+	require.Equal(t, storedTestData.BigNegativeInt32, retrievedTestData.BigNegativeInt32)
+	require.Equal(t, storedTestData.SmallNegativeInt32, retrievedTestData.SmallNegativeInt32)
+	require.Equal(t, storedTestData.ZeroInt32, retrievedTestData.ZeroInt32)
+	require.Equal(t, storedTestData.SmallPositiveInt32, retrievedTestData.SmallPositiveInt32)
+	require.Equal(t, storedTestData.BigPositiveInt32, retrievedTestData.BigPositiveInt32)
+
+	require.Equal(t, storedTestData.BigNegativeInt64, retrievedTestData.BigNegativeInt64)
+	require.Equal(t, storedTestData.SmallNegativeInt64, retrievedTestData.SmallNegativeInt64)
+	require.Equal(t, storedTestData.ZeroInt64, retrievedTestData.ZeroInt64)
+	require.Equal(t, storedTestData.SmallPositiveInt64, retrievedTestData.SmallPositiveInt64)
+	require.Equal(t, storedTestData.BigPositiveInt64, retrievedTestData.BigPositiveInt64)
+
+	require.Equal(t, storedTestData.Test1Float32, retrievedTestData.Test1Float32)
+	require.Equal(t, storedTestData.Test2Float32, retrievedTestData.Test2Float32)
+	require.Equal(t, storedTestData.Test3Float32, retrievedTestData.Test3Float32)
+	require.Equal(t, storedTestData.Test4Float32, retrievedTestData.Test4Float32)
+	require.Equal(t, storedTestData.ZeroFloat32, retrievedTestData.ZeroFloat32)
+
+	require.Equal(t, storedTestData.Test1Float64, retrievedTestData.Test1Float64)
+	require.Equal(t, storedTestData.Test2Float64, retrievedTestData.Test2Float64)
+	require.Equal(t, storedTestData.Test3Float64, retrievedTestData.Test3Float64)
+	require.Equal(t, storedTestData.Test4Float64, retrievedTestData.Test4Float64)
+	require.Equal(t, storedTestData.ZeroFloat64, retrievedTestData.ZeroFloat64)
 }
 
 func doStoreQueryTests(t *testing.T, // nolint: funlen,gocognit,gocyclo // Test file
@@ -3553,6 +3614,124 @@ func doStoreQueryWithSortingAndInitialPageOptionsTests(t *testing.T, // nolint: 
 			})
 		})
 	})
+}
+
+func doBatchTestPutThreeValues(t *testing.T, provider spi.Provider, useNewKeyOptimization bool) {
+	storeName := randomStoreName()
+
+	store, err := provider.OpenStore(storeName)
+	require.NoError(t, err)
+	require.NotNil(t, store)
+
+	defer func() {
+		require.NoError(t, store.Close())
+	}()
+
+	err = provider.SetStoreConfig(storeName,
+		spi.StoreConfiguration{TagNames: []string{"tagName1", "tagName2", "tagName3"}})
+	require.NoError(t, err)
+
+	key1TagsToStore := []spi.Tag{{Name: "tagName1"}}
+	key2TagsToStore := []spi.Tag{{Name: "tagName2"}}
+	key3TagsToStore := []spi.Tag{{Name: "tagName3"}}
+
+	putOptions := &spi.PutOptions{IsNewKey: useNewKeyOptimization}
+
+	operations := []spi.Operation{
+		{Key: "key1", Value: []byte("value1"), Tags: key1TagsToStore, PutOptions: putOptions},
+		{Key: "key2", Value: []byte(`{"field":"value"}`), Tags: key2TagsToStore, PutOptions: putOptions},
+		{Key: "key3", Value: []byte(`"value3"`), Tags: key3TagsToStore, PutOptions: putOptions},
+	}
+
+	err = store.Batch(operations)
+	require.NoError(t, err)
+
+	// Check and make sure all values and tags were stored
+
+	value, err := store.Get("key1")
+	require.NoError(t, err)
+	require.Equal(t, "value1", string(value))
+
+	retrievedTags, err := store.GetTags("key1")
+	require.True(t, equalTags(key1TagsToStore, retrievedTags), "Got unexpected tags")
+	require.NoError(t, err)
+
+	value, err = store.Get("key2")
+	require.NoError(t, err)
+	require.Equal(t, `{"field":"value"}`, string(value))
+
+	retrievedTags, err = store.GetTags("key2")
+	require.True(t, equalTags(key2TagsToStore, retrievedTags), "Got unexpected tags")
+	require.NoError(t, err)
+
+	value, err = store.Get("key3")
+	require.NoError(t, err)
+	require.Equal(t, `"value3"`, string(value))
+
+	retrievedTags, err = store.GetTags("key3")
+	require.True(t, equalTags(key3TagsToStore, retrievedTags), "Got unexpected tags")
+	require.NoError(t, err)
+}
+
+func doBatchTestPutOneUpdateOneDeleteOne(t *testing.T, provider spi.Provider, useNewKeyOptimization bool) {
+	storeName := randomStoreName()
+
+	store, err := provider.OpenStore(storeName)
+	require.NoError(t, err)
+	require.NotNil(t, store)
+
+	defer func() {
+		require.NoError(t, store.Close())
+	}()
+
+	err = provider.SetStoreConfig(storeName,
+		spi.StoreConfiguration{TagNames: []string{"tagName1", "tagName2", "tagName3"}})
+	require.NoError(t, err)
+
+	err = store.Put("key1", []byte("value1"), []spi.Tag{{Name: "tagName1", Value: "tagValue1"}}...)
+	require.NoError(t, err)
+
+	err = store.Put("key2", []byte("value2"), []spi.Tag{{Name: "tagName2", Value: "tagValue2"}}...)
+	require.NoError(t, err)
+
+	key3TagsToStore := []spi.Tag{{Name: "tagName3", Value: "tagValue3"}}
+
+	key1UpdatedTagsToStore := []spi.Tag{{Name: "tagName1"}}
+
+	putOptions := &spi.PutOptions{IsNewKey: useNewKeyOptimization}
+
+	operations := []spi.Operation{
+		{Key: "key3", Value: []byte("value3"), Tags: key3TagsToStore, PutOptions: putOptions}, // Put
+		{Key: "key1", Value: []byte("value1_new"), Tags: key1UpdatedTagsToStore},              // Update
+		{Key: "key2", Value: nil, Tags: nil},                                                  // Delete
+	}
+
+	err = store.Batch(operations)
+	require.NoError(t, err)
+
+	value, err := store.Get("key3")
+	require.NoError(t, err)
+	require.Equal(t, "value3", string(value))
+
+	retrievedTags, err := store.GetTags("key3")
+	require.True(t, equalTags(key3TagsToStore, retrievedTags), "Got unexpected tags")
+	require.NoError(t, err)
+
+	value, err = store.Get("key1")
+	require.NoError(t, err)
+	require.Equal(t, "value1_new", string(value))
+
+	retrievedTags, err = store.GetTags("key1")
+	require.True(t, equalTags(key1UpdatedTagsToStore, retrievedTags), "Got unexpected tags")
+	require.NoError(t, err)
+
+	value, err = store.Get("key2")
+	require.True(t, errors.Is(err, spi.ErrDataNotFound), "got unexpected error or no error")
+	require.Nil(t, value)
+
+	retrievedTags, err = store.GetTags("key2")
+	require.True(t, errors.Is(err, spi.ErrDataNotFound), "got unexpected error or no error")
+	require.Nil(t, retrievedTags)
 }
 
 func determineWhetherToCheckIteratorTotalItemCounts(options testOptions, storeConfigWasSet bool) bool {

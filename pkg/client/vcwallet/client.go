@@ -36,6 +36,7 @@ type provider interface {
 	VDRegistry() vdr.Registry
 	Crypto() crypto.Crypto
 	JSONLDDocumentLoader() ld.DocumentLoader
+	MediaTypeProfiles() []string
 	didCommProvider // to be used only if wallet needs to be participated in DIDComm.
 }
 
@@ -387,7 +388,7 @@ func (c *Client) Connect(invitation *outofband.Invitation, options ...wallet.Con
 // 		- DIDCommMsgMap containing request presentation message if operation is successful.
 // 		- error if operation fails.
 //
-func (c *Client) ProposePresentation(invitation *outofband.Invitation, options ...wallet.ProposePresentationOption) (*service.DIDCommMsgMap, error) { //nolint: lll
+func (c *Client) ProposePresentation(invitation *wallet.GenericInvitation, options ...wallet.InitiateInteractionOption) (*service.DIDCommMsgMap, error) { //nolint: lll
 	auth, err := c.auth()
 	if err != nil {
 		return nil, err
@@ -407,14 +408,61 @@ func (c *Client) ProposePresentation(invitation *outofband.Invitation, options .
 // 		- presentation: presentation to be sent.
 //
 // Returns:
+// 		- Credential interaction status containing status, redirectURL.
 // 		- error if operation fails.
 //
-// TODO: wait for acknowledgement option to be added.
-func (c *Client) PresentProof(thID string, presentProofFrom wallet.PresentProofFrom) error {
+func (c *Client) PresentProof(thID string, presentProofFrom ...wallet.ConcludeInteractionOptions) (*wallet.CredentialInteractionStatus, error) { //nolint: lll
 	auth, err := c.auth()
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	return c.wallet.PresentProof(auth, thID, presentProofFrom)
+	return c.wallet.PresentProof(auth, thID, presentProofFrom...)
+}
+
+// ProposeCredential sends propose credential message from wallet to issuer.
+// https://w3c-ccg.github.io/universal-wallet-interop-spec/#requestcredential
+//
+// Currently Supporting : 0453-issueCredentialV2
+// https://github.com/hyperledger/aries-rfcs/blob/main/features/0453-issue-credential-v2/README.md
+//
+// Args:
+// 		- invitation: out-of-band invitation from issuer.
+// 		- options: options for accepting invitation and send propose credential message.
+//
+// Returns:
+// 		- DIDCommMsgMap containing offer credential message if operation is successful.
+// 		- error if operation fails.
+//
+func (c *Client) ProposeCredential(invitation *wallet.GenericInvitation, options ...wallet.InitiateInteractionOption) (*service.DIDCommMsgMap, error) { // nolint: lll
+	auth, err := c.auth()
+	if err != nil {
+		return nil, err
+	}
+
+	return c.wallet.ProposeCredential(auth, invitation, options...)
+}
+
+// RequestCredential sends request credential message from wallet to issuer and
+// optionally waits for credential fulfillment.
+// https://w3c-ccg.github.io/universal-wallet-interop-spec/#proposecredential
+//
+// Currently Supporting : 0453-issueCredentialV2
+// https://github.com/hyperledger/aries-rfcs/blob/main/features/0453-issue-credential-v2/README.md
+//
+// Args:
+// 		- thID: thread ID (action ID) of offer credential message previously received.
+// 		- concludeInteractionOptions: options to conclude interaction like presentation to be shared etc.
+//
+// Returns:
+// 		- Credential interaction status containing status, redirectURL.
+// 		- error if operation fails.
+//
+func (c *Client) RequestCredential(thID string, options ...wallet.ConcludeInteractionOptions) (*wallet.CredentialInteractionStatus, error) { // nolint: lll
+	auth, err := c.auth()
+	if err != nil {
+		return nil, err
+	}
+
+	return c.wallet.RequestCredential(auth, thID, options...)
 }

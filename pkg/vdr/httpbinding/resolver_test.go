@@ -50,12 +50,8 @@ func TestWithOutboundOpts(t *testing.T) {
 	// opt.client is nil, so setting timeout should panic
 	require.Panics(t, func() { opt(clOpts) })
 
-	opt = WithTLSConfig(nil)
+	opt = WithHTTPClient(&http.Client{})
 	require.NotNil(t, opt)
-
-	clOpts = &VDR{}
-	// opt.client is nil, so setting TLS config should panic
-	require.Panics(t, func() { opt(clOpts) })
 }
 
 func TestNew(t *testing.T) {
@@ -208,7 +204,7 @@ func TestRead_DIDDocNotFound(t *testing.T) {
 	require.NoError(t, err)
 	_, err = resolver.Read("did:example:334455")
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "DID does not exist")
+	require.Equal(t, vdrapi.ErrNotFound, err)
 }
 
 func TestRead_UnsupportedStatus(t *testing.T) {

@@ -7,7 +7,6 @@ SPDX-License-Identifier: Apache-2.0
 package aries
 
 import (
-	"errors"
 	"fmt"
 	"net/http"
 
@@ -26,6 +25,7 @@ import (
 	mdissuecredential "github.com/hyperledger/aries-framework-go/pkg/didcomm/protocol/middleware/issuecredential"
 	mdpresentproof "github.com/hyperledger/aries-framework-go/pkg/didcomm/protocol/middleware/presentproof"
 	"github.com/hyperledger/aries-framework-go/pkg/didcomm/protocol/outofband"
+	"github.com/hyperledger/aries-framework-go/pkg/didcomm/protocol/outofbandv2"
 	"github.com/hyperledger/aries-framework-go/pkg/didcomm/protocol/presentproof"
 	"github.com/hyperledger/aries-framework-go/pkg/didcomm/transport"
 	arieshttp "github.com/hyperledger/aries-framework-go/pkg/didcomm/transport/http"
@@ -82,7 +82,7 @@ func defFrameworkOpts(frameworkOpts *Aries) error { //nolint:gocyclo
 	// - Introduce depends on OutOfBand
 	frameworkOpts.protocolSvcCreators = append(frameworkOpts.protocolSvcCreators,
 		newMessagePickupSvc(), newRouteSvc(), newExchangeSvc(), newOutOfBandSvc(),
-		newIntroduceSvc(), newIssueCredentialSvc(), newPresentProofSvc())
+		newIntroduceSvc(), newIssueCredentialSvc(), newPresentProofSvc(), newOutOfBandV2Svc())
 
 	if frameworkOpts.secretLock == nil && frameworkOpts.kmsCreator == nil {
 		err = createDefSecretLock(frameworkOpts)
@@ -95,70 +95,116 @@ func defFrameworkOpts(frameworkOpts *Aries) error { //nolint:gocyclo
 }
 
 func newExchangeSvc() api.ProtocolSvcCreator {
-	return func(prv api.Provider) (dispatcher.ProtocolService, error) {
-		return didexchange.New(prv)
+	return api.ProtocolSvcCreator{
+		Create: func(prv api.Provider) (dispatcher.ProtocolService, error) {
+			return &didexchange.Service{}, nil
+		},
 	}
 }
 
 func newIntroduceSvc() api.ProtocolSvcCreator {
-	return func(prv api.Provider) (dispatcher.ProtocolService, error) {
-		return introduce.New(prv)
+	return api.ProtocolSvcCreator{
+		Create: func(prv api.Provider) (dispatcher.ProtocolService, error) {
+			return &introduce.Service{}, nil
+		},
 	}
 }
 
 func newIssueCredentialSvc() api.ProtocolSvcCreator {
-	return func(prv api.Provider) (dispatcher.ProtocolService, error) {
-		service, err := issuecredential.New(prv)
-		if err != nil {
-			return nil, err
-		}
+	return api.ProtocolSvcCreator{
+		Create: func(prv api.Provider) (dispatcher.ProtocolService, error) {
+			return &issuecredential.Service{}, nil
+		},
+		Init: func(svc dispatcher.ProtocolService, prv api.Provider) error {
+			icsvc, ok := svc.(*issuecredential.Service)
+			if !ok {
+				return fmt.Errorf("expected issue credential ProtocolService to be a %T", issuecredential.Service{})
+			}
 
-		// sets default middleware to the service
-		service.Use(mdissuecredential.SaveCredentials(prv))
+			err := icsvc.Initialize(prv)
+			if err != nil {
+				return err
+			}
 
-		return service, nil
+			// sets default middleware to the service
+			icsvc.Use(mdissuecredential.SaveCredentials(prv))
+
+			return nil
+		},
 	}
 }
 
 func newPresentProofSvc() api.ProtocolSvcCreator {
-	return func(prv api.Provider) (dispatcher.ProtocolService, error) {
-		service, err := presentproof.New(prv)
-		if err != nil {
-			return nil, err
-		}
+	return api.ProtocolSvcCreator{
+		Create: func(prv api.Provider) (dispatcher.ProtocolService, error) {
+			return &presentproof.Service{}, nil
+		},
+		Init: func(svc dispatcher.ProtocolService, prv api.Provider) error {
+			ppsvc, ok := svc.(*presentproof.Service)
+			if !ok {
+				return fmt.Errorf("expected present proof ProtocolService to be a %T", presentproof.Service{})
+			}
 
-		// sets default middleware to the service
-		service.Use(
-			mdpresentproof.SavePresentation(prv),
-			mdpresentproof.PresentationDefinition(prv,
-				mdpresentproof.WithAddProofFn(mdpresentproof.AddBBSProofFn(prv)),
-			),
-		)
+			err := ppsvc.Initialize(prv)
+			if err != nil {
+				return err
+			}
 
-		return service, nil
+			// sets default middleware to the service
+			ppsvc.Use(
+				mdpresentproof.SavePresentation(prv),
+				mdpresentproof.PresentationDefinition(prv,
+					mdpresentproof.WithAddProofFn(mdpresentproof.AddBBSProofFn(prv)),
+				),
+			)
+
+			return nil
+		},
 	}
 }
 
 func newRouteSvc() api.ProtocolSvcCreator {
-	return func(prv api.Provider) (dispatcher.ProtocolService, error) {
-		return mediator.New(prv)
+	return api.ProtocolSvcCreator{
+		Create: func(prv api.Provider) (dispatcher.ProtocolService, error) {
+			return &mediator.Service{}, nil
+		},
 	}
 }
 
 func newMessagePickupSvc() api.ProtocolSvcCreator {
-	return func(prv api.Provider) (dispatcher.ProtocolService, error) {
-		tp, ok := prv.(transport.Provider)
-		if !ok {
-			return nil, errors.New("failed to cast transport provider")
-		}
-
-		return messagepickup.New(prv, tp)
+	return api.ProtocolSvcCreator{
+		Create: func(prv api.Provider) (dispatcher.ProtocolService, error) {
+			return &messagepickup.Service{}, nil
+		},
 	}
 }
 
 func newOutOfBandSvc() api.ProtocolSvcCreator {
-	return func(prv api.Provider) (dispatcher.ProtocolService, error) {
-		return outofband.New(prv)
+	return api.ProtocolSvcCreator{
+		Create: func(prv api.Provider) (dispatcher.ProtocolService, error) {
+			return &outofband.Service{}, nil
+		},
+	}
+}
+
+func newOutOfBandV2Svc() api.ProtocolSvcCreator {
+	return api.ProtocolSvcCreator{
+		Create: func(prv api.Provider) (dispatcher.ProtocolService, error) {
+			return &outofbandv2.Service{}, nil
+		},
+		Init: func(svc dispatcher.ProtocolService, prv api.Provider) error {
+			oobv2svc, ok := svc.(*outofbandv2.Service)
+			if !ok {
+				return fmt.Errorf("expected OOB V2 ProtocolService to be a %T", outofbandv2.Service{})
+			}
+
+			err := oobv2svc.Initialize(prv)
+			if err != nil {
+				return err
+			}
+
+			return nil
+		},
 	}
 }
 
@@ -229,10 +275,11 @@ func setAdditionalDefaultOpts(frameworkOpts *Aries) error {
 	}
 
 	if frameworkOpts.mediaTypeProfiles == nil {
-		// for now only set legacy media type profile to match default key type and primary packer above.
+		// For now only set legacy media type profile to match default key type and primary packer above.
+		// Using media type profile, not just a media type, in order to align with OOB invitations' Accept header.
 		// TODO once keyAgreement is added in the packers, this can be switched to DIDcomm V2 media type as well as
 		// 		switching legacyPacker with authcrtypt as primary packer and using an ECDH-1PU key as default key above.
-		frameworkOpts.mediaTypeProfiles = []string{transport.MediaTypeRFC0019EncryptedEnvelope}
+		frameworkOpts.mediaTypeProfiles = []string{transport.MediaTypeAIP2RFC0019Profile}
 	}
 
 	return nil

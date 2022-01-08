@@ -48,7 +48,7 @@ func TestStart_Execute(t *testing.T) {
 
 func TestAbandoning_CanTransitionTo(t *testing.T) {
 	st := &abandoned{}
-	require.Equal(t, stateNameAbandoned, st.Name())
+	require.Equal(t, StateNameAbandoned, st.Name())
 	// common states
 	require.False(t, st.CanTransitionTo(&start{}))
 	require.False(t, st.CanTransitionTo(&abandoned{}))
@@ -68,11 +68,9 @@ func TestAbandoning_Execute(t *testing.T) {
 	t.Run("Internal Error", func(t *testing.T) {
 		md := &metaData{}
 		md.Msg = service.NewDIDCommMsgMap(struct{}{})
+		md.Msg.SetID(uuid.New().String())
 
-		thID := uuid.New().String()
-		require.NoError(t, md.Msg.SetID(thID))
-
-		followup, action, err := (&abandoned{Code: codeInternalError}).Execute(md)
+		followup, action, err := (&abandoned{V: SpecV2, Code: codeInternalError}).Execute(md)
 		require.NoError(t, err)
 		require.Equal(t, &noOp{}, followup)
 		require.NotNil(t, action)
@@ -87,7 +85,35 @@ func TestAbandoning_Execute(t *testing.T) {
 				r := &model.ProblemReport{}
 				require.NoError(t, msg.Decode(r))
 				require.Equal(t, codeInternalError, r.Description.Code)
-				require.Equal(t, ProblemReportMsgType, r.Type)
+				require.Equal(t, ProblemReportMsgTypeV2, r.Type)
+
+				return nil
+			})
+
+		require.NoError(t, action(messenger))
+	})
+
+	t.Run("Internal Error (v3)", func(t *testing.T) {
+		md := &metaData{}
+		md.Msg = service.NewDIDCommMsgMap(struct{}{})
+		md.Msg.SetID(uuid.New().String())
+
+		followup, action, err := (&abandoned{V: SpecV3, Code: codeInternalError}).Execute(md)
+		require.NoError(t, err)
+		require.Equal(t, &noOp{}, followup)
+		require.NotNil(t, action)
+
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		messenger := serviceMocks.NewMockMessenger(ctrl)
+		messenger.EXPECT().
+			ReplyToNested(gomock.Any(), gomock.Any()).
+			Do(func(msg service.DIDCommMsgMap, opts *service.NestedReplyOpts) error {
+				r := &model.ProblemReportV2{}
+				require.NoError(t, msg.Decode(r))
+				require.Equal(t, codeInternalError, r.Body.Code)
+				require.Equal(t, ProblemReportMsgTypeV3, r.Type)
 
 				return nil
 			})
@@ -105,11 +131,9 @@ func TestAbandoning_Execute(t *testing.T) {
 	t.Run("Custom Error", func(t *testing.T) {
 		md := &metaData{err: customError{error: errors.New("error")}}
 		md.Msg = service.NewDIDCommMsgMap(struct{}{})
+		md.Msg.SetID(uuid.New().String())
 
-		thID := uuid.New().String()
-		require.NoError(t, md.Msg.SetID(thID))
-
-		followup, action, err := (&abandoned{Code: codeInternalError}).Execute(md)
+		followup, action, err := (&abandoned{V: SpecV2, Code: codeInternalError}).Execute(md)
 		require.NoError(t, err)
 		require.Equal(t, &noOp{}, followup)
 		require.NotNil(t, action)
@@ -124,7 +148,7 @@ func TestAbandoning_Execute(t *testing.T) {
 				r := &model.ProblemReport{}
 				require.NoError(t, msg.Decode(r))
 				require.Equal(t, codeRejectedError, r.Description.Code)
-				require.Equal(t, ProblemReportMsgType, r.Type)
+				require.Equal(t, ProblemReportMsgTypeV2, r.Type)
 
 				return nil
 			})
@@ -135,8 +159,7 @@ func TestAbandoning_Execute(t *testing.T) {
 	t.Run("No error code", func(t *testing.T) {
 		md := &metaData{}
 		md.Msg = service.NewDIDCommMsgMap(struct{}{})
-
-		require.NoError(t, md.Msg.SetID(uuid.New().String()))
+		md.Msg.SetID(uuid.New().String())
 
 		followup, action, err := (&abandoned{}).Execute(md)
 		require.NoError(t, err)
@@ -149,7 +172,7 @@ func TestAbandoning_Execute(t *testing.T) {
 
 func TestDone_CanTransitionTo(t *testing.T) {
 	st := &done{}
-	require.Equal(t, stateNameDone, st.Name())
+	require.Equal(t, StateNameDone, st.Name())
 	notTransition(t, st)
 }
 
@@ -193,23 +216,23 @@ func TestRequestReceived_CanTransitionTo(t *testing.T) {
 
 func TestRequestReceived_Execute(t *testing.T) {
 	t.Run("With presentation", func(t *testing.T) {
-		msg := randomInboundMessage(RequestPresentationMsgType)
+		msg := randomInboundMessage(RequestPresentationMsgTypeV2)
 		msg["will_confirm"] = true
 
-		followup, action, err := (&requestReceived{}).Execute(&metaData{
-			presentation:        &Presentation{},
+		followup, action, err := (&requestReceived{V: SpecV2}).Execute(&metaData{
+			presentation:        &PresentationV2{},
 			transitionalPayload: transitionalPayload{Action: Action{Msg: msg}},
 		})
 		require.NoError(t, err)
-		require.Equal(t, &presentationSent{WillConfirm: true}, followup)
+		require.Equal(t, &presentationSent{V: SpecV2, WillConfirm: true}, followup)
 		require.NoError(t, action(nil))
 	})
 
 	t.Run("With presentation - Ack is not required", func(t *testing.T) {
 		followup, action, err := (&requestReceived{}).Execute(&metaData{
-			presentation: &Presentation{},
+			presentation: &PresentationV2{},
 			transitionalPayload: transitionalPayload{Action: Action{
-				Msg: randomInboundMessage(RequestPresentationMsgType),
+				Msg: randomInboundMessage(RequestPresentationMsgTypeV2),
 			}},
 		})
 		require.NoError(t, err)
@@ -225,8 +248,8 @@ func TestRequestReceived_Execute(t *testing.T) {
 	})
 
 	t.Run("Message decode error", func(t *testing.T) {
-		followup, action, err := (&requestReceived{}).Execute(&metaData{
-			presentation: &Presentation{},
+		followup, action, err := (&requestReceived{V: SpecV2}).Execute(&metaData{
+			presentation: &PresentationV2{},
 			transitionalPayload: transitionalPayload{Action: Action{
 				Msg: service.DIDCommMsgMap{"@type": []int{1}},
 			}},
@@ -267,11 +290,19 @@ func randomInboundMessage(t string) service.DIDCommMsgMap {
 	})
 }
 
+func randomInboundMessageV3(t string) service.DIDCommMsgMap {
+	return service.DIDCommMsgMap{
+		"id":   uuid.New().String(),
+		"type": t,
+		"thid": uuid.New().String(),
+	}
+}
+
 func TestRequestSent_Execute(t *testing.T) {
 	t.Run("Success", func(t *testing.T) {
-		followup, action, err := (&requestSent{}).Execute(&metaData{
+		followup, action, err := (&requestSent{V: SpecV2}).Execute(&metaData{
 			transitionalPayload: transitionalPayload{Action: Action{Msg: randomInboundMessage("")}},
-			request:             &RequestPresentation{},
+			request:             &RequestPresentationV2{},
 		})
 		require.NoError(t, err)
 		require.Equal(t, &noOp{}, followup)
@@ -281,7 +312,7 @@ func TestRequestSent_Execute(t *testing.T) {
 		defer ctrl.Finish()
 
 		messenger := serviceMocks.NewMockMessenger(ctrl)
-		messenger.EXPECT().ReplyToMsg(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any())
+		messenger.EXPECT().ReplyToMsg(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any())
 
 		require.NoError(t, action(messenger))
 	})
@@ -300,6 +331,7 @@ func TestRequestSent_Execute(t *testing.T) {
 			Action: Action{Msg: service.NewDIDCommMsgMap(struct {
 				WillConfirm bool `json:"will_confirm"`
 			}{WillConfirm: true})},
+			Direction: outboundMessage,
 		}})
 		require.NoError(t, err)
 		require.Equal(t, &noOp{}, followup)
@@ -309,13 +341,13 @@ func TestRequestSent_Execute(t *testing.T) {
 		defer ctrl.Finish()
 
 		messenger := serviceMocks.NewMockMessenger(ctrl)
-		messenger.EXPECT().Send(gomock.Any(), gomock.Any(), gomock.Any())
+		messenger.EXPECT().Send(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any())
 
 		require.NoError(t, action(messenger))
 	})
 
 	t.Run("Message decode error", func(t *testing.T) {
-		followup, action, err := (&requestSent{}).Execute(&metaData{transitionalPayload: transitionalPayload{
+		followup, action, err := (&requestSent{V: SpecV2}).Execute(&metaData{transitionalPayload: transitionalPayload{
 			Action: Action{Msg: service.DIDCommMsgMap{"@type": []int{1}}},
 		}})
 		require.Error(t, err)
@@ -345,7 +377,7 @@ func TestPresentationSent_CanTransitionTo(t *testing.T) {
 func TestPresentationSent_Execute(t *testing.T) {
 	t.Run("Success", func(t *testing.T) {
 		followup, action, err := (&presentationSent{}).
-			Execute(&metaData{presentation: &Presentation{}})
+			Execute(&metaData{presentation: &PresentationV2{}})
 		require.NoError(t, err)
 		require.Equal(t, &done{}, followup)
 		require.NotNil(t, action)
@@ -354,14 +386,14 @@ func TestPresentationSent_Execute(t *testing.T) {
 		defer ctrl.Finish()
 
 		messenger := serviceMocks.NewMockMessenger(ctrl)
-		messenger.EXPECT().ReplyToMsg(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any())
+		messenger.EXPECT().ReplyToMsg(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any())
 
 		require.NoError(t, action(messenger))
 	})
 
 	t.Run("Success (WillConfirm)", func(t *testing.T) {
 		followup, action, err := (&presentationSent{WillConfirm: true}).
-			Execute(&metaData{presentation: &Presentation{}})
+			Execute(&metaData{presentation: &PresentationV2{}})
 		require.NoError(t, err)
 		require.Equal(t, &noOp{}, followup)
 		require.NotNil(t, action)
@@ -370,7 +402,7 @@ func TestPresentationSent_Execute(t *testing.T) {
 		defer ctrl.Finish()
 
 		messenger := serviceMocks.NewMockMessenger(ctrl)
-		messenger.EXPECT().ReplyToMsg(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any())
+		messenger.EXPECT().ReplyToMsg(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any())
 
 		require.NoError(t, action(messenger))
 	})
@@ -405,7 +437,7 @@ func TestPresentationReceived_Execute(t *testing.T) {
 	t.Run("Success", func(t *testing.T) {
 		followup, action, err := (&presentationReceived{}).Execute(&metaData{
 			transitionalPayload: transitionalPayload{AckRequired: true},
-			presentation:        &Presentation{},
+			presentation:        &PresentationV2{},
 		})
 		require.NoError(t, err)
 		require.Equal(t, &done{}, followup)
@@ -415,15 +447,15 @@ func TestPresentationReceived_Execute(t *testing.T) {
 		defer ctrl.Finish()
 
 		messenger := serviceMocks.NewMockMessenger(ctrl)
-		messenger.EXPECT().ReplyToMsg(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any())
+		messenger.EXPECT().ReplyToMsg(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any())
 
 		require.NoError(t, action(messenger))
 	})
 
 	t.Run("Ack is not required", func(t *testing.T) {
 		followup, action, err := (&presentationReceived{}).Execute(&metaData{
-			request:      &RequestPresentation{WillConfirm: true},
-			presentation: &Presentation{},
+			request:      &RequestPresentationV2{WillConfirm: true},
+			presentation: &PresentationV2{},
 		})
 		require.NoError(t, err)
 		require.Equal(t, &done{}, followup)
@@ -454,7 +486,7 @@ func TestProposePresentationSent_Execute(t *testing.T) {
 	t.Run("Success", func(t *testing.T) {
 		followup, action, err := (&proposalSent{}).Execute(&metaData{
 			transitionalPayload: transitionalPayload{Action: Action{Msg: randomInboundMessage("")}},
-			proposePresentation: &ProposePresentation{},
+			proposePresentation: &ProposePresentationV2{},
 		})
 		require.NoError(t, err)
 		require.Equal(t, &noOp{}, followup)
@@ -464,7 +496,7 @@ func TestProposePresentationSent_Execute(t *testing.T) {
 		defer ctrl.Finish()
 
 		messenger := serviceMocks.NewMockMessenger(ctrl)
-		messenger.EXPECT().ReplyToMsg(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any())
+		messenger.EXPECT().ReplyToMsg(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any())
 
 		require.NoError(t, action(messenger))
 	})
@@ -479,7 +511,9 @@ func TestProposePresentationSent_Execute(t *testing.T) {
 	})
 
 	t.Run("Success (outbound)", func(t *testing.T) {
-		followup, action, err := (&proposalSent{}).Execute(&metaData{})
+		followup, action, err := (&proposalSent{}).Execute(&metaData{
+			transitionalPayload: transitionalPayload{Direction: outboundMessage},
+		})
 		require.NoError(t, err)
 		require.Equal(t, &noOp{}, followup)
 		require.NotNil(t, action)
@@ -488,7 +522,7 @@ func TestProposePresentationSent_Execute(t *testing.T) {
 		defer ctrl.Finish()
 
 		messenger := serviceMocks.NewMockMessenger(ctrl)
-		messenger.EXPECT().Send(gomock.Any(), gomock.Any(), gomock.Any())
+		messenger.EXPECT().Send(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any())
 
 		require.NoError(t, action(messenger))
 	})

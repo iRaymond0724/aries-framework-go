@@ -21,6 +21,7 @@ import (
 	"github.com/hyperledger/aries-framework-go/pkg/didcomm/common/service"
 	protocol "github.com/hyperledger/aries-framework-go/pkg/didcomm/protocol/issuecredential"
 	"github.com/hyperledger/aries-framework-go/pkg/internal/logutil"
+	"github.com/hyperledger/aries-framework-go/pkg/store/connection"
 )
 
 var logger = log.New("aries-framework/controller/issuecredential")
@@ -66,14 +67,20 @@ const (
 
 	Actions             = "Actions"
 	SendOffer           = "SendOffer"
+	SendOfferV3         = "SendOfferV3"
 	SendProposal        = "SendProposal"
+	SendProposalV3      = "SendProposalV3"
 	SendRequest         = "SendRequest"
+	SendRequestV3       = "SendRequestV3"
 	AcceptProposal      = "AcceptProposal"
+	AcceptProposalV3    = "AcceptProposalV3"
 	DeclineProposal     = "DeclineProposal"
 	AcceptOffer         = "AcceptOffer"
 	DeclineOffer        = "DeclineOffer"
 	NegotiateProposal   = "NegotiateProposal"
+	NegotiateProposalV3 = "NegotiateProposalV3"
 	AcceptRequest       = "AcceptRequest"
+	AcceptRequestV3     = "AcceptRequestV3"
 	DeclineRequest      = "DeclineRequest"
 	AcceptCredential    = "AcceptCredential"
 	DeclineCredential   = "DeclineCredential"
@@ -89,6 +96,7 @@ const (
 	errEmptyIssueCredential   = "empty IssueCredential"
 	errEmptyProposeCredential = "empty ProposeCredential"
 	errEmptyRequestCredential = "empty RequestCredential"
+	errMissingConnection      = "no connection for given connection ID"
 	// log constants.
 	successString = "success"
 
@@ -111,13 +119,20 @@ func WithAutoExecuteRFC0593(p rfc0593.Provider) Option {
 	}
 }
 
+// Provider contains dependencies for the issuecredential protocol and is typically created by using aries.Context().
+type Provider interface {
+	Service(id string) (interface{}, error)
+	ConnectionLookup() *connection.Lookup
+}
+
 // Command is controller command for issue credential.
 type Command struct {
 	client *issuecredential.Client
+	lookup *connection.Lookup
 }
 
 // New returns new issue credential controller command instance.
-func New(ctx issuecredential.Provider, notifier command.Notifier, options ...Option) (*Command, error) {
+func New(ctx Provider, notifier command.Notifier, options ...Option) (*Command, error) {
 	opts := &Options{}
 
 	for i := range options {
@@ -166,7 +181,10 @@ func New(ctx issuecredential.Provider, notifier command.Notifier, options ...Opt
 		obs.RegisterAction(protocol.Name+_actions, actions)
 	}
 
-	return &Command{client: client}, nil
+	return &Command{
+		client: client,
+		lookup: ctx.ConnectionLookup(),
+	}, nil
 }
 
 // GetHandlers returns list of all commands supported by this controller command.
@@ -174,15 +192,21 @@ func (c *Command) GetHandlers() []command.Handler {
 	return []command.Handler{
 		cmdutil.NewCommandHandler(CommandName, Actions, c.Actions),
 		cmdutil.NewCommandHandler(CommandName, SendOffer, c.SendOffer),
+		cmdutil.NewCommandHandler(CommandName, SendOfferV3, c.SendOffer),
 		cmdutil.NewCommandHandler(CommandName, SendProposal, c.SendProposal),
+		cmdutil.NewCommandHandler(CommandName, SendProposalV3, c.SendProposal),
 		cmdutil.NewCommandHandler(CommandName, SendRequest, c.SendRequest),
+		cmdutil.NewCommandHandler(CommandName, SendRequestV3, c.SendRequest),
 		cmdutil.NewCommandHandler(CommandName, AcceptProposal, c.AcceptProposal),
+		cmdutil.NewCommandHandler(CommandName, AcceptProposalV3, c.AcceptProposal),
 		cmdutil.NewCommandHandler(CommandName, DeclineProposal, c.DeclineProposal),
 		cmdutil.NewCommandHandler(CommandName, AcceptOffer, c.AcceptOffer),
 		cmdutil.NewCommandHandler(CommandName, AcceptProblemReport, c.AcceptProblemReport),
 		cmdutil.NewCommandHandler(CommandName, DeclineOffer, c.DeclineOffer),
 		cmdutil.NewCommandHandler(CommandName, NegotiateProposal, c.NegotiateProposal),
+		cmdutil.NewCommandHandler(CommandName, NegotiateProposalV3, c.NegotiateProposal),
 		cmdutil.NewCommandHandler(CommandName, AcceptRequest, c.AcceptRequest),
+		cmdutil.NewCommandHandler(CommandName, AcceptRequestV3, c.AcceptRequest),
 		cmdutil.NewCommandHandler(CommandName, DeclineRequest, c.DeclineRequest),
 		cmdutil.NewCommandHandler(CommandName, AcceptCredential, c.AcceptCredential),
 		cmdutil.NewCommandHandler(CommandName, DeclineCredential, c.DeclineCredential),
@@ -230,7 +254,14 @@ func (c *Command) SendOffer(rw io.Writer, req io.Reader) command.Error {
 		return command.NewValidationError(InvalidRequestErrorCode, errors.New(errEmptyOfferCredential))
 	}
 
-	piid, err := c.client.SendOffer(args.OfferCredential, args.MyDID, args.TheirDID)
+	conn, err := c.lookup.GetConnectionRecordByDIDs(args.MyDID, args.TheirDID)
+	if err != nil {
+		logutil.LogDebug(logger, CommandName, SendOffer, errMissingConnection)
+
+		return command.NewValidationError(InvalidRequestErrorCode, errors.New(errMissingConnection))
+	}
+
+	piid, err := c.client.SendOffer(args.OfferCredential, conn)
 	if err != nil {
 		logutil.LogError(logger, CommandName, SendOffer, err.Error())
 		return command.NewExecuteError(SendOfferErrorCode, err)
@@ -267,7 +298,14 @@ func (c *Command) SendProposal(rw io.Writer, req io.Reader) command.Error {
 		return command.NewValidationError(InvalidRequestErrorCode, errors.New(errEmptyProposeCredential))
 	}
 
-	piid, err := c.client.SendProposal(args.ProposeCredential, args.MyDID, args.TheirDID)
+	conn, err := c.lookup.GetConnectionRecordByDIDs(args.MyDID, args.TheirDID)
+	if err != nil {
+		logutil.LogDebug(logger, CommandName, SendProposal, errMissingConnection)
+
+		return command.NewValidationError(InvalidRequestErrorCode, errors.New(errMissingConnection))
+	}
+
+	piid, err := c.client.SendProposal(args.ProposeCredential, conn)
 	if err != nil {
 		logutil.LogError(logger, CommandName, SendProposal, err.Error())
 		return command.NewExecuteError(SendProposalErrorCode, err)
@@ -304,7 +342,14 @@ func (c *Command) SendRequest(rw io.Writer, req io.Reader) command.Error {
 		return command.NewValidationError(InvalidRequestErrorCode, errors.New(errEmptyRequestCredential))
 	}
 
-	piid, err := c.client.SendRequest(args.RequestCredential, args.MyDID, args.TheirDID)
+	conn, err := c.lookup.GetConnectionRecordByDIDs(args.MyDID, args.TheirDID)
+	if err != nil {
+		logutil.LogDebug(logger, CommandName, SendRequest, errMissingConnection)
+
+		return command.NewValidationError(InvalidRequestErrorCode, errors.New(errMissingConnection))
+	}
+
+	piid, err := c.client.SendRequest(args.RequestCredential, conn)
 	if err != nil {
 		logutil.LogError(logger, CommandName, SendRequest, err.Error())
 		return command.NewExecuteError(SendRequestErrorCode, err)
@@ -393,7 +438,8 @@ func (c *Command) DeclineProposal(rw io.Writer, req io.Reader) command.Error {
 		return command.NewValidationError(InvalidRequestErrorCode, errors.New(errEmptyPIID))
 	}
 
-	if err := c.client.DeclineProposal(args.PIID, args.Reason); err != nil {
+	if err := c.client.DeclineProposal(args.PIID, args.Reason,
+		issuecredential.RequestRedirect(args.RedirectURL)); err != nil {
 		logutil.LogError(logger, CommandName, DeclineProposal, err.Error())
 		return command.NewExecuteError(DeclineProposalErrorCode, err)
 	}
@@ -419,7 +465,7 @@ func (c *Command) AcceptOffer(rw io.Writer, req io.Reader) command.Error {
 		return command.NewValidationError(InvalidRequestErrorCode, errors.New(errEmptyPIID))
 	}
 
-	if err := c.client.AcceptOffer(args.PIID); err != nil {
+	if err := c.client.AcceptOffer(args.PIID, &issuecredential.RequestCredential{}); err != nil {
 		logutil.LogError(logger, CommandName, AcceptOffer, err.Error())
 		return command.NewExecuteError(AcceptOfferErrorCode, err)
 	}
@@ -528,7 +574,8 @@ func (c *Command) DeclineRequest(rw io.Writer, req io.Reader) command.Error {
 		return command.NewValidationError(InvalidRequestErrorCode, errors.New(errEmptyPIID))
 	}
 
-	if err := c.client.DeclineRequest(args.PIID, args.Reason); err != nil {
+	if err := c.client.DeclineRequest(args.PIID, args.Reason,
+		issuecredential.RequestRedirect(args.RedirectURL)); err != nil {
 		logutil.LogError(logger, CommandName, DeclineRequest, err.Error())
 		return command.NewExecuteError(DeclineRequestErrorCode, err)
 	}
@@ -554,7 +601,15 @@ func (c *Command) AcceptCredential(rw io.Writer, req io.Reader) command.Error {
 		return command.NewValidationError(InvalidRequestErrorCode, errors.New(errEmptyPIID))
 	}
 
-	if err := c.client.AcceptCredential(args.PIID, args.Names...); err != nil {
+	opts := []issuecredential.AcceptCredentialOptions{
+		issuecredential.AcceptByFriendlyNames(args.Names...),
+	}
+
+	if args.SkipStore {
+		opts = append(opts, issuecredential.AcceptBySkippingStorage())
+	}
+
+	if err := c.client.AcceptCredential(args.PIID, opts...); err != nil {
 		logutil.LogError(logger, CommandName, AcceptCredential, err.Error())
 		return command.NewExecuteError(AcceptCredentialErrorCode, err)
 	}

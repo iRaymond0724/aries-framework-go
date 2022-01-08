@@ -36,14 +36,50 @@ type presentProofSendRequestPresentationRequest struct { // nolint: unused,deadc
 	// in: body
 	Body struct {
 		// MyDID sender's did
-		// required: true
+		//
+		// optional: required if ConnectionID is not present.
 		MyDID string `json:"my_did"`
 		// TheirDID receiver's did
-		// required: true
+		//
+		// optional: required if ConnectionID is not present.
 		TheirDID string `json:"their_did"`
+		// ConnectionID ID of connection between sender and receiver.
+		//
+		// optional: if present, is used instead of MyDID + TheirDID.
+		ConnectionID string `json:"connection_id"`
 		// RequestPresentation describes values that need to be revealed and predicates that need to be fulfilled.
 		// required: true
-		RequestPresentation struct{ *protocol.RequestPresentation } `json:"request_presentation"`
+		RequestPresentation struct {
+			*protocol.RequestPresentationV2
+		} `json:"request_presentation"`
+	}
+}
+
+// presentProofSendRequestPresentationV3Request model
+//
+// This is used for operation to send a request presentation.
+//
+// swagger:parameters presentProofSendRequestPresentationV3
+type presentProofSendRequestPresentationV3Request struct { // nolint: unused,deadcode
+	// in: body
+	Body struct {
+		// MyDID sender's did
+		//
+		// optional: required if ConnectionID is not present.
+		MyDID string `json:"my_did"`
+		// TheirDID receiver's did
+		//
+		// optional: required if ConnectionID is not present.
+		TheirDID string `json:"their_did"`
+		// ConnectionID ID of connection between sender and receiver.
+		//
+		// optional: if present, is used instead of MyDID + TheirDID.
+		ConnectionID string `json:"connection_id"`
+		// RequestPresentation describes values that need to be revealed and predicates that need to be fulfilled.
+		// required: true
+		RequestPresentation struct {
+			*protocol.RequestPresentationV3
+		} `json:"request_presentation"`
 	}
 }
 
@@ -69,14 +105,50 @@ type presentProofSendProposePresentationRequest struct { // nolint: unused,deadc
 	// in: body
 	Body struct {
 		// MyDID sender's did
-		// required: true
+		//
+		// optional: required if ConnectionID is not present.
 		MyDID string `json:"my_did"`
 		// TheirDID receiver's did
-		// required: true
+		//
+		// optional: required if ConnectionID is not present.
 		TheirDID string `json:"their_did"`
+		// ConnectionID ID of connection between sender and receiver.
+		//
+		// optional: if present, is used instead of MyDID + TheirDID.
+		ConnectionID string `json:"connection_id"`
 		// ProposePresentation is a message sent by the Prover to the verifier to initiate a proof presentation process.
 		// required: true
-		ProposePresentation struct{ *protocol.ProposePresentation } `json:"propose_presentation"`
+		ProposePresentation struct {
+			*protocol.ProposePresentationV2
+		} `json:"propose_presentation"`
+	}
+}
+
+// presentProofSendProposePresentationV3Request model
+//
+// This is used for operation to send a propose presentation.
+//
+// swagger:parameters presentProofSendProposePresentationV3
+type presentProofSendProposePresentationV3Request struct { // nolint: unused,deadcode
+	// in: body
+	Body struct {
+		// MyDID sender's did
+		//
+		// optional: required if ConnectionID is not present.
+		MyDID string `json:"my_did"`
+		// TheirDID receiver's did
+		//
+		// optional: required if ConnectionID is not present.
+		TheirDID string `json:"their_did"`
+		// ConnectionID ID of connection between sender and receiver.
+		//
+		// optional: if present, is used instead of MyDID + TheirDID.
+		ConnectionID string `json:"connection_id"`
+		// ProposePresentation is a message sent by the Prover to the verifier to initiate a proof presentation process.
+		// required: true
+		ProposePresentation struct {
+			*protocol.ProposePresentationV3
+		} `json:"propose_presentation"`
 	}
 }
 
@@ -110,7 +182,28 @@ type presentProofAcceptRequestPresentationRequest struct { // nolint: unused,dea
 		// Presentation is a message that contains signed presentations.
 		//
 		// required: true
-		Presentation struct{ *protocol.Presentation } `json:"presentation"`
+		Presentation struct{ *protocol.PresentationV2 } `json:"presentation"`
+	}
+}
+
+// presentProofAcceptRequestPresentationV3Request model
+//
+// This is used for operation to accept a request presentation.
+//
+// swagger:parameters presentProofAcceptRequestPresentationV3
+type presentProofAcceptRequestPresentationV3Request struct { // nolint: unused,deadcode
+	// Protocol instance ID
+	//
+	// in: path
+	// required: true
+	PIID string `json:"piid"`
+
+	// in: body
+	Body struct {
+		// Presentation is a message that contains signed presentations.
+		//
+		// required: true
+		Presentation struct{ *protocol.PresentationV3 } `json:"presentation"`
 	}
 }
 
@@ -141,7 +234,32 @@ type presentProofAcceptProposePresentationRequest struct { // nolint: unused,dea
 		// RequestPresentation describes values that need to be revealed and predicates that need to be fulfilled.
 		//
 		// required: true
-		RequestPresentation struct{ *protocol.RequestPresentation } `json:"request_presentation"`
+		RequestPresentation struct {
+			*protocol.RequestPresentationV2
+		} `json:"request_presentation"`
+	}
+}
+
+// presentProofAcceptProposePresentationV3Request model
+//
+// This is used for operation to accept a propose presentation.
+//
+// swagger:parameters presentProofAcceptProposePresentationV3
+type presentProofAcceptProposePresentationV3Request struct { // nolint: unused,deadcode
+	// Protocol instance ID
+	//
+	// in: path
+	// required: true
+	PIID string `json:"piid"`
+
+	// in: body
+	Body struct {
+		// RequestPresentation describes values that need to be revealed and predicates that need to be fulfilled.
+		//
+		// required: true
+		RequestPresentation struct {
+			*protocol.RequestPresentationV3
+		} `json:"request_presentation"`
 	}
 }
 
@@ -202,7 +320,33 @@ type presentProofNegotiateRequestPresentationRequest struct { // nolint: unused,
 		// propose using a different presentation format.
 		//
 		// required: true
-		ProposePresentation struct{ *protocol.ProposePresentation } `json:"propose_presentation"`
+		ProposePresentation struct {
+			*protocol.ProposePresentationV2
+		} `json:"propose_presentation"`
+	}
+}
+
+// presentProofNegotiateRequestPresentationV3Request model
+//
+// Is used by the Prover to counter a presentation request they received with a proposal.
+//
+// swagger:parameters presentProofNegotiateRequestPresentationV3
+type presentProofNegotiateRequestPresentationV3Request struct { // nolint: unused,deadcode
+	// Protocol instance ID
+	//
+	// in: path
+	// required: true
+	PIID string `json:"piid"`
+
+	// in: body
+	Body struct {
+		// ProposePresentation is a response message to a request-presentation message when the Prover wants to
+		// propose using a different presentation format.
+		//
+		// required: true
+		ProposePresentation struct {
+			*protocol.ProposePresentationV3
+		} `json:"propose_presentation"`
 	}
 }
 
@@ -282,6 +426,10 @@ type presentProofDeclinePresentationRequest struct { // nolint: unused,deadcode
 
 	// Reason is an explanation of why it was declined
 	Reason string `json:"reason"`
+
+	// RedirectURL is optional web redirect URL that can be sent to prover.
+	// Useful in cases where verifier would want prover to redirect once presentation is declined.
+	RedirectURL string `json:"redirectURL"`
 }
 
 // presentProofDeclinePresentationResponse model

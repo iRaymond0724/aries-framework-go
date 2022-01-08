@@ -81,6 +81,19 @@ export const didExchangeClient = class {
         return await connections
     }
 
+    async createDIDCommV2Connection() {
+        let connections = await this.performDIDExchangeE2E()
+
+        let setToV2Resp = await Promise.all([
+            this.agent1.connection.SetConnectionToDIDCommV2({id: connections[0]}),
+            this.agent2.connection.SetConnectionToDIDCommV2({id: connections[1]})
+        ])
+
+        assert.isNotEmpty(setToV2Resp);
+
+        return connections
+    }
+
     static async addRouter(mode, agent) {
         try {
             let resp = await agent.mediator.getConnections()
@@ -218,16 +231,16 @@ export const didExchangeClient = class {
 }
 
 export async function newDIDExchangeClient(agent1, agent2) {
-    let aries1 = await newAries(agent1, agent1, [], [`${environment.HTTP_LOCAL_CONTEXT_PROVIDER_URL}`])
-    let aries2 = await newAries(agent2, agent2, [], [`${environment.HTTP_LOCAL_CONTEXT_PROVIDER_URL}`])
+    let aries1 = await newAries(agent1, agent1, [], [`${environment.HTTP_LOCAL_CONTEXT_PROVIDER_URL}`], [`${environment.USER_MEDIA_TYPE_PROFILES}`])
+    let aries2 = await newAries(agent2, agent2, [], [`${environment.HTTP_LOCAL_CONTEXT_PROVIDER_URL}`], [`${environment.USER_MEDIA_TYPE_PROFILES}`])
 
     return new didExchangeClient(aries1, aries2, wasmMode)
 }
 
 
 export async function newDIDExchangeRESTClient(agentURL1, agentURL2) {
-    let aries1 = await newAriesREST(agentURL1)
-    let aries2 = await newAriesREST(agentURL2)
+    let aries1 = await newAriesREST(agentURL1, [`${environment.USER_MEDIA_TYPE_PROFILES}`])
+    let aries2 = await newAriesREST(agentURL2, [`${environment.USER_MEDIA_TYPE_PROFILES}`])
 
     return new didExchangeClient(aries1, aries2, restMode)
 }

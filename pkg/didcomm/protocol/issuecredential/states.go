@@ -32,6 +32,9 @@ const (
 	stateNameOfferReceived      = "offer-received"
 	stateNameRequestSent        = "request-sent"
 	stateNameCredentialReceived = "credential-received"
+
+	// web redirect decorator V2.
+	webRedirect = "~web-redirect"
 )
 
 const (
@@ -46,12 +49,14 @@ type stateAction func(messenger service.Messenger) error
 type state interface {
 	// Name of this state.
 	Name() string
-	// Whether this state allows transitioning into the next state.
+	// CanTransitionTo Whether this state allows transitioning into the next state.
 	CanTransitionTo(next state) bool
-	// Executes this state, returning a followup state to be immediately executed as well.
+	// ExecuteInbound this state, returning a followup state to be immediately executed as well.
 	// The 'noOp' state should be returned if the state has no followup.
 	ExecuteInbound(msg *MetaData) (state, stateAction, error)
 	ExecuteOutbound(msg *MetaData) (state, stateAction, error)
+	// Message properties required for further steps or next state transition.
+	Properties() map[string]interface{}
 }
 
 // represents zero state's action.
@@ -74,6 +79,10 @@ func (s *noOp) ExecuteInbound(_ *MetaData) (state, stateAction, error) {
 
 func (s *noOp) ExecuteOutbound(_ *MetaData) (state, stateAction, error) {
 	return nil, nil, errors.New("cannot execute no-op")
+}
+
+func (s *noOp) Properties() map[string]interface{} {
+	return map[string]interface{}{}
 }
 
 // start state.
@@ -104,9 +113,15 @@ func (s *start) ExecuteOutbound(_ *MetaData) (state, stateAction, error) {
 	return nil, nil, fmt.Errorf("%s: ExecuteOutbound is not implemented yet", s.Name())
 }
 
+func (s *start) Properties() map[string]interface{} {
+	return map[string]interface{}{}
+}
+
 // abandoning state.
 type abandoning struct {
-	Code string
+	V          string
+	Code       string
+	properties map[string]interface{}
 }
 
 func (s *abandoning) Name() string {
@@ -120,7 +135,7 @@ func (s *abandoning) CanTransitionTo(st state) bool {
 func (s *abandoning) ExecuteInbound(md *MetaData) (state, stateAction, error) {
 	// if code is not provided it means we do not need to notify the another agent.
 	// if we received ProblemReport message no need to answer.
-	if s.Code == "" || md.Msg.Type() == ProblemReportMsgType {
+	if s.Code == "" || md.Msg.Type() == ProblemReportMsgTypeV2 || md.Msg.Type() == ProblemReportMsgTypeV3 {
 		return &done{}, zeroAction, nil
 	}
 
@@ -137,10 +152,18 @@ func (s *abandoning) ExecuteInbound(md *MetaData) (state, stateAction, error) {
 	}
 
 	return &done{}, func(messenger service.Messenger) error {
+		if s.V == SpecV3 {
+			return messenger.ReplyToNested(service.NewDIDCommMsgMap(&model.ProblemReportV2{
+				Type: ProblemReportMsgTypeV3,
+				Body: model.ProblemReportV2Body{Code: code.Code, WebRedirect: md.properties[webRedirect]},
+			}), &service.NestedReplyOpts{ThreadID: thID, MyDID: md.MyDID, TheirDID: md.TheirDID, V: getDIDVersion(s.V)})
+		}
+
 		return messenger.ReplyToNested(service.NewDIDCommMsgMap(&model.ProblemReport{
-			Type:        ProblemReportMsgType,
+			Type:        ProblemReportMsgTypeV2,
 			Description: code,
-		}), &service.NestedReplyOpts{ThreadID: thID, MyDID: md.MyDID, TheirDID: md.TheirDID})
+			WebRedirect: md.properties[webRedirect],
+		}), &service.NestedReplyOpts{ThreadID: thID, MyDID: md.MyDID, TheirDID: md.TheirDID, V: getDIDVersion(s.V)})
 	}, nil
 }
 
@@ -148,8 +171,15 @@ func (s *abandoning) ExecuteOutbound(_ *MetaData) (state, stateAction, error) {
 	return nil, nil, fmt.Errorf("%s: ExecuteOutbound is not implemented yet", s.Name())
 }
 
+func (s *abandoning) Properties() map[string]interface{} {
+	return s.properties
+}
+
 // done state.
-type done struct{}
+type done struct {
+	V          string
+	properties map[string]interface{}
+}
 
 func (s *done) Name() string {
 	return stateNameDone
@@ -167,8 +197,15 @@ func (s *done) ExecuteOutbound(_ *MetaData) (state, stateAction, error) {
 	return nil, nil, fmt.Errorf("%s: ExecuteOutbound is not implemented yet", s.Name())
 }
 
+func (s *done) Properties() map[string]interface{} {
+	return s.properties
+}
+
 // proposalReceived the Issuer's state.
-type proposalReceived struct{}
+type proposalReceived struct {
+	V          string
+	properties map[string]interface{}
+}
 
 func (s *proposalReceived) Name() string {
 	return stateNameProposalReceived
@@ -179,15 +216,22 @@ func (s *proposalReceived) CanTransitionTo(st state) bool {
 }
 
 func (s *proposalReceived) ExecuteInbound(_ *MetaData) (state, stateAction, error) {
-	return &offerSent{}, zeroAction, nil
+	return &offerSent{V: s.V}, zeroAction, nil
 }
 
 func (s *proposalReceived) ExecuteOutbound(_ *MetaData) (state, stateAction, error) {
 	return nil, nil, fmt.Errorf("%s: ExecuteOutbound is not implemented yet", s.Name())
 }
 
+func (s *proposalReceived) Properties() map[string]interface{} {
+	return s.properties
+}
+
 // offerSent the Issuer's state.
-type offerSent struct{}
+type offerSent struct {
+	V          string
+	properties map[string]interface{}
+}
 
 func (s *offerSent) Name() string {
 	return stateNameOfferSent
@@ -200,15 +244,25 @@ func (s *offerSent) CanTransitionTo(st state) bool {
 }
 
 func (s *offerSent) ExecuteInbound(md *MetaData) (state, stateAction, error) {
-	if md.offerCredential == nil {
+	if md.offerCredentialV2 == nil && md.offerCredentialV3 == nil {
 		return nil, nil, errors.New("offer credential was not provided")
 	}
 
 	// creates the state's action.
 	action := func(messenger service.Messenger) error {
+		if s.V == SpecV3 {
+			// sets message type
+			md.offerCredentialV3.Type = OfferCredentialMsgTypeV3
+
+			return messenger.ReplyToMsg(md.Msg, service.NewDIDCommMsgMap(md.offerCredentialV3), md.MyDID, md.TheirDID,
+				service.WithVersion(getDIDVersion(s.V)))
+		}
+
 		// sets message type.
-		md.offerCredential.Type = OfferCredentialMsgType
-		return messenger.ReplyToMsg(md.Msg, service.NewDIDCommMsgMap(md.offerCredential), md.MyDID, md.TheirDID)
+		md.offerCredentialV2.Type = OfferCredentialMsgTypeV2
+
+		return messenger.ReplyToMsg(md.Msg, service.NewDIDCommMsgMap(md.offerCredentialV2), md.MyDID, md.TheirDID,
+			service.WithVersion(getDIDVersion(s.V)))
 	}
 
 	return &noOp{}, action, nil
@@ -217,14 +271,21 @@ func (s *offerSent) ExecuteInbound(md *MetaData) (state, stateAction, error) {
 func (s *offerSent) ExecuteOutbound(md *MetaData) (state, stateAction, error) {
 	// creates the state's action.
 	action := func(messenger service.Messenger) error {
-		return messenger.Send(md.Msg, md.MyDID, md.TheirDID)
+		return messenger.Send(md.Msg, md.MyDID, md.TheirDID, service.WithVersion(getDIDVersion(s.V)))
 	}
 
 	return &noOp{}, action, nil
 }
 
+func (s *offerSent) Properties() map[string]interface{} {
+	return s.properties
+}
+
 // requestReceived the Issuer's state.
-type requestReceived struct{}
+type requestReceived struct {
+	V          string
+	properties map[string]interface{}
+}
 
 func (s *requestReceived) Name() string {
 	return stateNameRequestReceived
@@ -235,15 +296,25 @@ func (s *requestReceived) CanTransitionTo(st state) bool {
 }
 
 func (s *requestReceived) ExecuteInbound(md *MetaData) (state, stateAction, error) {
-	if md.issueCredential == nil {
+	if md.issueCredentialV2 == nil && md.issueCredentialV3 == nil {
 		return nil, nil, errors.New("issue credential was not provided")
 	}
 
 	// creates the state's action
 	action := func(messenger service.Messenger) error {
+		if s.V == SpecV3 {
+			// sets message type
+			md.issueCredentialV3.Type = IssueCredentialMsgTypeV3
+
+			return messenger.ReplyToMsg(md.Msg, service.NewDIDCommMsgMap(md.issueCredentialV3), md.MyDID, md.TheirDID,
+				service.WithVersion(getDIDVersion(s.V)))
+		}
+
 		// sets message type
-		md.issueCredential.Type = IssueCredentialMsgType
-		return messenger.ReplyToMsg(md.Msg, service.NewDIDCommMsgMap(md.issueCredential), md.MyDID, md.TheirDID)
+		md.issueCredentialV2.Type = IssueCredentialMsgTypeV2
+
+		return messenger.ReplyToMsg(md.Msg, service.NewDIDCommMsgMap(md.issueCredentialV2), md.MyDID, md.TheirDID,
+			service.WithVersion(getDIDVersion(s.V)))
 	}
 
 	return &credentialIssued{}, action, nil
@@ -253,8 +324,15 @@ func (s *requestReceived) ExecuteOutbound(_ *MetaData) (state, stateAction, erro
 	return nil, nil, fmt.Errorf("%s: ExecuteOutbound is not implemented yet", s.Name())
 }
 
+func (s *requestReceived) Properties() map[string]interface{} {
+	return s.properties
+}
+
 // credentialIssued the Issuer's state.
-type credentialIssued struct{}
+type credentialIssued struct {
+	V          string
+	properties map[string]interface{}
+}
 
 func (s *credentialIssued) Name() string {
 	return stateNameCredentialIssued
@@ -272,8 +350,15 @@ func (s *credentialIssued) ExecuteOutbound(_ *MetaData) (state, stateAction, err
 	return nil, nil, fmt.Errorf("%s: ExecuteOutbound is not implemented yet", s.Name())
 }
 
+func (s *credentialIssued) Properties() map[string]interface{} {
+	return s.properties
+}
+
 // proposalSent the Holder's state.
-type proposalSent struct{}
+type proposalSent struct {
+	V          string
+	properties map[string]interface{}
+}
 
 func (s *proposalSent) Name() string {
 	return stateNameProposalSent
@@ -284,15 +369,25 @@ func (s *proposalSent) CanTransitionTo(st state) bool {
 }
 
 func (s *proposalSent) ExecuteInbound(md *MetaData) (state, stateAction, error) {
-	if md.proposeCredential == nil {
+	if md.proposeCredentialV2 == nil && md.proposeCredentialV3 == nil {
 		return nil, nil, errors.New("propose credential was not provided")
 	}
 
 	// creates the state's action
 	action := func(messenger service.Messenger) error {
+		if s.V == SpecV3 {
+			// sets message type
+			md.proposeCredentialV3.Type = ProposeCredentialMsgTypeV3
+
+			return messenger.ReplyToMsg(md.Msg, service.NewDIDCommMsgMap(md.proposeCredentialV3), md.MyDID, md.TheirDID,
+				service.WithVersion(getDIDVersion(s.V)))
+		}
+
 		// sets message type
-		md.proposeCredential.Type = ProposeCredentialMsgType
-		return messenger.ReplyToMsg(md.Msg, service.NewDIDCommMsgMap(md.proposeCredential), md.MyDID, md.TheirDID)
+		md.proposeCredentialV2.Type = ProposeCredentialMsgTypeV2
+
+		return messenger.ReplyToMsg(md.Msg, service.NewDIDCommMsgMap(md.proposeCredentialV2), md.MyDID, md.TheirDID,
+			service.WithVersion(getDIDVersion(s.V)))
 	}
 
 	return &noOp{}, action, nil
@@ -301,14 +396,21 @@ func (s *proposalSent) ExecuteInbound(md *MetaData) (state, stateAction, error) 
 func (s *proposalSent) ExecuteOutbound(md *MetaData) (state, stateAction, error) {
 	// creates the state's action
 	action := func(messenger service.Messenger) error {
-		return messenger.Send(md.Msg, md.MyDID, md.TheirDID)
+		return messenger.Send(md.Msg, md.MyDID, md.TheirDID, service.WithVersion(getDIDVersion(s.V)))
 	}
 
 	return &noOp{}, action, nil
 }
 
+func (s *proposalSent) Properties() map[string]interface{} {
+	return s.properties
+}
+
 // offerReceived the Holder's state.
-type offerReceived struct{}
+type offerReceived struct {
+	V          string
+	properties map[string]interface{}
+}
 
 func (s *offerReceived) Name() string {
 	return stateNameOfferReceived
@@ -322,29 +424,62 @@ func (s *offerReceived) CanTransitionTo(st state) bool {
 
 func (s *offerReceived) ExecuteInbound(md *MetaData) (state, stateAction, error) {
 	// sends propose credential if it was provided
-	if md.proposeCredential != nil {
-		return &proposalSent{}, zeroAction, nil
+	if md.proposeCredentialV2 != nil || md.proposeCredentialV3 != nil {
+		return &proposalSent{V: s.V}, zeroAction, nil
 	}
 
-	offer := OfferCredential{}
-	if err := md.Msg.Decode(&offer); err != nil {
-		return nil, nil, fmt.Errorf("decode: %w", err)
-	}
+	var action func(messenger service.Messenger) error
 
-	response := &RequestCredential{
-		Type:           RequestCredentialMsgType,
-		Formats:        offer.Formats,
-		RequestsAttach: offer.OffersAttach,
-	}
+	if s.V == SpecV3 { //nolint: nestif
+		offer := OfferCredentialV3{}
+		if err := md.Msg.Decode(&offer); err != nil {
+			return nil, nil, fmt.Errorf("decode: %w", err)
+		}
 
-	if md.RequestCredential() != nil {
-		response = md.RequestCredential()
-		response.Type = RequestCredentialMsgType
-	}
+		response := &RequestCredentialV3{
+			Type: RequestCredentialMsgTypeV3,
+			ID:   offer.ID,
+			Body: RequestCredentialV3Body{
+				GoalCode: offer.Body.GoalCode,
+				Comment:  offer.Body.Comment,
+			},
+			Attachments: offer.Attachments,
+		}
 
-	// creates the state's action
-	action := func(messenger service.Messenger) error {
-		return messenger.ReplyToMsg(md.Msg, service.NewDIDCommMsgMap(response), md.MyDID, md.TheirDID)
+		req := md.RequestCredentialV3()
+		if req != nil && req.notEmpty() {
+			response = md.RequestCredentialV3()
+			response.Type = RequestCredentialMsgTypeV3
+		}
+
+		// creates the state's action
+		action = func(messenger service.Messenger) error {
+			return messenger.ReplyToMsg(md.Msg, service.NewDIDCommMsgMap(response), md.MyDID, md.TheirDID,
+				service.WithVersion(getDIDVersion(s.V)))
+		}
+	} else {
+		offer := OfferCredentialV2{}
+		if err := md.Msg.Decode(&offer); err != nil {
+			return nil, nil, fmt.Errorf("decode: %w", err)
+		}
+
+		response := &RequestCredentialV2{
+			Type:           RequestCredentialMsgTypeV2,
+			Formats:        offer.Formats,
+			RequestsAttach: offer.OffersAttach,
+		}
+
+		req := md.RequestCredentialV2()
+		if req != nil && req.notEmpty() {
+			response = md.RequestCredentialV2()
+			response.Type = RequestCredentialMsgTypeV2
+		}
+
+		// creates the state's action
+		action = func(messenger service.Messenger) error {
+			return messenger.ReplyToMsg(md.Msg, service.NewDIDCommMsgMap(response), md.MyDID, md.TheirDID,
+				service.WithVersion(getDIDVersion(s.V)))
+		}
 	}
 
 	return &requestSent{}, action, nil
@@ -354,8 +489,15 @@ func (s *offerReceived) ExecuteOutbound(_ *MetaData) (state, stateAction, error)
 	return nil, nil, fmt.Errorf("%s: ExecuteOutbound is not implemented yet", s.Name())
 }
 
+func (s *offerReceived) Properties() map[string]interface{} {
+	return s.properties
+}
+
 // requestSent the Holder's state.
-type requestSent struct{}
+type requestSent struct {
+	V          string
+	properties map[string]interface{}
+}
 
 func (s *requestSent) Name() string {
 	return stateNameRequestSent
@@ -372,14 +514,21 @@ func (s *requestSent) ExecuteInbound(_ *MetaData) (state, stateAction, error) {
 func (s *requestSent) ExecuteOutbound(md *MetaData) (state, stateAction, error) {
 	// creates the state's action
 	action := func(messenger service.Messenger) error {
-		return messenger.Send(md.Msg, md.MyDID, md.TheirDID)
+		return messenger.Send(md.Msg, md.MyDID, md.TheirDID, service.WithVersion(getDIDVersion(s.V)))
 	}
 
 	return &noOp{}, action, nil
 }
 
+func (s *requestSent) Properties() map[string]interface{} {
+	return s.properties
+}
+
 // credentialReceived state.
-type credentialReceived struct{}
+type credentialReceived struct {
+	V          string
+	properties map[string]interface{}
+}
 
 func (s *credentialReceived) Name() string {
 	return stateNameCredentialReceived
@@ -392,14 +541,26 @@ func (s *credentialReceived) CanTransitionTo(st state) bool {
 func (s *credentialReceived) ExecuteInbound(md *MetaData) (state, stateAction, error) {
 	// creates the state's action
 	action := func(messenger service.Messenger) error {
+		if s.V == SpecV3 {
+			return messenger.ReplyToMsg(md.Msg, service.NewDIDCommMsgMap(model.AckV2{
+				Type: AckMsgTypeV3,
+				Body: model.AckV2Body{Status: "OK"},
+			}), md.MyDID, md.TheirDID, service.WithVersion(getDIDVersion(s.V)))
+		}
+
 		return messenger.ReplyToMsg(md.Msg, service.NewDIDCommMsgMap(model.Ack{
-			Type: AckMsgType,
-		}), md.MyDID, md.TheirDID)
+			Type:   AckMsgTypeV2,
+			Status: "OK",
+		}), md.MyDID, md.TheirDID, service.WithVersion(getDIDVersion(s.V)))
 	}
 
-	return &done{}, action, nil
+	return &done{properties: s.properties}, action, nil
 }
 
 func (s *credentialReceived) ExecuteOutbound(_ *MetaData) (state, stateAction, error) {
 	return nil, nil, fmt.Errorf("%s: ExecuteOutbound is not implemented yet", s.Name())
+}
+
+func (s *credentialReceived) Properties() map[string]interface{} {
+	return s.properties
 }

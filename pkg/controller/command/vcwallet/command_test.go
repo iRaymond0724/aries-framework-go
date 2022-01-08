@@ -23,17 +23,22 @@ import (
 	outofbandClient "github.com/hyperledger/aries-framework-go/pkg/client/outofband"
 	"github.com/hyperledger/aries-framework-go/pkg/controller/command"
 	"github.com/hyperledger/aries-framework-go/pkg/crypto/tinkcrypto"
+	"github.com/hyperledger/aries-framework-go/pkg/didcomm/common/model"
 	"github.com/hyperledger/aries-framework-go/pkg/didcomm/common/service"
 	"github.com/hyperledger/aries-framework-go/pkg/didcomm/protocol/didexchange"
+	issuecredentialsvc "github.com/hyperledger/aries-framework-go/pkg/didcomm/protocol/issuecredential"
 	"github.com/hyperledger/aries-framework-go/pkg/didcomm/protocol/mediator"
 	outofbandSvc "github.com/hyperledger/aries-framework-go/pkg/didcomm/protocol/outofband"
+	oobv2 "github.com/hyperledger/aries-framework-go/pkg/didcomm/protocol/outofbandv2"
 	presentproofSvc "github.com/hyperledger/aries-framework-go/pkg/didcomm/protocol/presentproof"
 	"github.com/hyperledger/aries-framework-go/pkg/doc/did"
 	"github.com/hyperledger/aries-framework-go/pkg/doc/verifiable"
 	vdrapi "github.com/hyperledger/aries-framework-go/pkg/framework/aries/api/vdr"
+	mockoutofbandv2 "github.com/hyperledger/aries-framework-go/pkg/internal/gomocks/client/outofbandv2"
 	"github.com/hyperledger/aries-framework-go/pkg/internal/ldtestutil"
 	"github.com/hyperledger/aries-framework-go/pkg/kms"
 	mockdidexchange "github.com/hyperledger/aries-framework-go/pkg/mock/didcomm/protocol/didexchange"
+	mockissuecredential "github.com/hyperledger/aries-framework-go/pkg/mock/didcomm/protocol/issuecredential"
 	mockmediator "github.com/hyperledger/aries-framework-go/pkg/mock/didcomm/protocol/mediator"
 	mockoutofband "github.com/hyperledger/aries-framework-go/pkg/mock/didcomm/protocol/outofband"
 	mockpresentproof "github.com/hyperledger/aries-framework-go/pkg/mock/didcomm/protocol/presentproof"
@@ -244,6 +249,9 @@ const (
             ]
         }
     }`
+	webRedirectStatusKey = "status"
+	webRedirectURLKey    = "url"
+	exampleWebRedirect   = "http://example.com/sample"
 )
 
 func TestNew(t *testing.T) {
@@ -251,7 +259,7 @@ func TestNew(t *testing.T) {
 		cmd := New(newMockProvider(t), &Config{})
 		require.NotNil(t, cmd)
 
-		require.Len(t, cmd.GetHandlers(), 18)
+		require.Len(t, cmd.GetHandlers(), 20)
 	})
 }
 
@@ -1997,7 +2005,7 @@ func TestCommand_ProposePresentation(t *testing.T) {
 				return []presentproofSvc.Action{
 					{
 						PIID: thID,
-						Msg: service.NewDIDCommMsgMap(&presentproofSvc.RequestPresentation{
+						Msg: service.NewDIDCommMsgMap(&presentproofSvc.RequestPresentationV2{
 							Comment: "mock msg",
 						}),
 						MyDID:    myDID,
@@ -2027,7 +2035,7 @@ func TestCommand_ProposePresentation(t *testing.T) {
 
 		request := &ProposePresentationRequest{
 			WalletAuth: WalletAuth{UserID: sampleDIDCommUser, Auth: token},
-			Invitation: &outofbandClient.Invitation{},
+			Invitation: &wallet.GenericInvitation{},
 		}
 
 		var b bytes.Buffer
@@ -2130,9 +2138,51 @@ func TestCommand_PresentProof(t *testing.T) {
 		require.NoError(t, cmdErr)
 	})
 
+	t.Run("successfully present proof - wait for done", func(t *testing.T) {
+		thID := uuid.New().String()
+		mockPresentProofSvc := &mockpresentproof.MockPresentProofSvc{
+			RegisterMsgEventHandle: func(ch chan<- service.StateMsg) error {
+				ch <- service.StateMsg{
+					Type:    service.PostState,
+					StateID: presentproofSvc.StateNameDone,
+					Properties: &mockdidexchange.MockEventProperties{
+						Properties: map[string]interface{}{
+							webRedirectStatusKey: model.AckStatusOK,
+							webRedirectURLKey:    exampleWebRedirect,
+						},
+					},
+					Msg: &mockMsg{thID: thID},
+				}
+
+				return nil
+			},
+		}
+		mockctx.ServiceMap[presentproofSvc.Name] = mockPresentProofSvc
+
+		cmd := New(mockctx, &Config{})
+
+		request := &PresentProofRequest{
+			WalletAuth:   WalletAuth{UserID: sampleDIDCommUser, Auth: token},
+			ThreadID:     thID,
+			Presentation: json.RawMessage{},
+			WaitForDone:  true,
+			Timeout:      1 * time.Millisecond,
+		}
+
+		var b bytes.Buffer
+		cmdErr := cmd.PresentProof(&b, getReader(t, &request))
+		require.NoError(t, cmdErr)
+
+		var response wallet.CredentialInteractionStatus
+		require.NoError(t, json.NewDecoder(&b).Decode(&response))
+		require.NotEmpty(t, response)
+		require.Equal(t, exampleWebRedirect, response.RedirectURL)
+		require.Equal(t, model.AckStatusOK, response.Status)
+	})
+
 	t.Run("failed to present proof", func(t *testing.T) {
 		ppSvc := &mockpresentproof.MockPresentProofSvc{
-			ActionContinueFunc: func(string, presentproofSvc.Opt) error {
+			ActionContinueFunc: func(string, ...presentproofSvc.Opt) error {
 				return fmt.Errorf(sampleCommandError)
 			},
 		}
@@ -2178,6 +2228,291 @@ func TestCommand_PresentProof(t *testing.T) {
 		require.Error(t, cmdErr)
 
 		validateError(t, cmdErr, command.ExecuteError, PresentProofErrorCode, "failed to get VC wallet profile")
+		require.Empty(t, b.Bytes())
+	})
+}
+
+func TestCommand_ProposeCredential(t *testing.T) {
+	const (
+		sampleDIDCommUser = "sample-didcomm-user02"
+		sampleMsgComment  = "sample mock msg"
+		myDID             = "did:mydid:123"
+		theirDID          = "did:theirdid:123"
+	)
+
+	mockctx := newMockProvider(t)
+
+	createSampleUserProfile(t, mockctx, &CreateOrUpdateProfileRequest{
+		UserID:             sampleDIDCommUser,
+		LocalKMSPassphrase: samplePassPhrase,
+	})
+
+	token, lock := unlockWallet(t, mockctx, &UnlockWalletRequest{
+		UserID:             sampleDIDCommUser,
+		LocalKMSPassphrase: samplePassPhrase,
+	})
+
+	defer lock()
+
+	t.Run("successfully send propose credential", func(t *testing.T) {
+		sampleConnID := uuid.New().String()
+
+		oobSvc := &mockoutofband.MockOobService{
+			AcceptInvitationHandle: func(*outofbandSvc.Invitation, outofbandSvc.Options) (string, error) {
+				return sampleConnID, nil
+			},
+		}
+		mockctx.ServiceMap[outofbandSvc.Name] = oobSvc
+
+		didexSvc := &mockdidexchange.MockDIDExchangeSvc{
+			RegisterMsgEventHandle: func(ch chan<- service.StateMsg) error {
+				ch <- service.StateMsg{
+					Type:       service.PostState,
+					StateID:    didexchange.StateIDCompleted,
+					Properties: &mockdidexchange.MockEventProperties{ConnID: sampleConnID},
+				}
+
+				return nil
+			},
+		}
+		mockctx.ServiceMap[didexchange.DIDExchange] = didexSvc
+
+		thID := uuid.New().String()
+		icSvc := &mockissuecredential.MockIssueCredentialSvc{
+			ActionsFunc: func() ([]issuecredentialsvc.Action, error) {
+				return []issuecredentialsvc.Action{
+					{
+						PIID: thID,
+						Msg: service.NewDIDCommMsgMap(&issuecredentialsvc.OfferCredentialV2{
+							Comment: sampleMsgComment,
+						}),
+						MyDID:    myDID,
+						TheirDID: theirDID,
+					},
+				}, nil
+			},
+			HandleFunc: func(service.DIDCommMsg) (string, error) {
+				return thID, nil
+			},
+		}
+		mockctx.ServiceMap[issuecredentialsvc.Name] = icSvc
+
+		store, err := mockctx.StorageProvider().OpenStore(connection.Namespace)
+		require.NoError(t, err)
+
+		record := &connection.Record{
+			ConnectionID: sampleConnID,
+			MyDID:        myDID,
+			TheirDID:     theirDID,
+		}
+		recordBytes, err := json.Marshal(record)
+		require.NoError(t, err)
+		require.NoError(t, store.Put(fmt.Sprintf("conn_%s", sampleConnID), recordBytes))
+
+		cmd := New(mockctx, &Config{})
+
+		request := &ProposeCredentialRequest{
+			WalletAuth: WalletAuth{UserID: sampleDIDCommUser, Auth: token},
+			Invitation: &wallet.GenericInvitation{},
+		}
+
+		var b bytes.Buffer
+		cmdErr := cmd.ProposeCredential(&b, getReader(t, &request))
+		require.NoError(t, cmdErr)
+
+		var response ProposeCredentialResponse
+		require.NoError(t, json.NewDecoder(&b).Decode(&response))
+		require.NotEmpty(t, response)
+		require.NotEmpty(t, response.OfferCredential)
+
+		offer := &issuecredentialsvc.OfferCredentialV2{}
+
+		err = response.OfferCredential.Decode(offer)
+		require.NoError(t, err)
+		require.NotEmpty(t, offer)
+		require.Equal(t, sampleMsgComment, offer.Comment)
+	})
+
+	t.Run("failed to send propose credential", func(t *testing.T) {
+		oobSvc := &mockoutofband.MockOobService{
+			AcceptInvitationHandle: func(*outofbandSvc.Invitation, outofbandSvc.Options) (string, error) {
+				return "", fmt.Errorf(sampleCommandError)
+			},
+		}
+
+		mockctx.ServiceMap[outofbandSvc.Name] = oobSvc
+
+		cmd := New(mockctx, &Config{})
+
+		request := &ConnectRequest{
+			WalletAuth: WalletAuth{UserID: sampleDIDCommUser, Auth: token},
+			Invitation: &outofbandClient.Invitation{},
+			ConnectOpts: ConnectOpts{
+				MyLabel: "sample-label",
+			},
+		}
+
+		var b bytes.Buffer
+		cmdErr := cmd.ProposeCredential(&b, getReader(t, &request))
+		require.Error(t, cmdErr)
+
+		validateError(t, cmdErr, command.ExecuteError, ProposeCredentialErrorCode, sampleCommandError)
+		validateError(t, cmdErr, command.ExecuteError, ProposeCredentialErrorCode, "failed to accept invitation")
+		require.Empty(t, b.Bytes())
+	})
+
+	t.Run("failed to send propose credential - invalid request", func(t *testing.T) {
+		cmd := New(mockctx, &Config{})
+
+		var b bytes.Buffer
+		cmdErr := cmd.ProposeCredential(&b, bytes.NewBufferString("--"))
+		require.Error(t, cmdErr)
+
+		validateError(t, cmdErr, command.ValidationError, InvalidRequestErrorCode, "invalid character")
+		require.Empty(t, b.Bytes())
+	})
+
+	t.Run("failed to send propose credential - invalid profile", func(t *testing.T) {
+		cmd := New(mockctx, &Config{})
+
+		request := &ConnectRequest{
+			WalletAuth: WalletAuth{UserID: sampleUserID, Auth: sampleFakeTkn},
+			Invitation: &outofbandClient.Invitation{},
+			ConnectOpts: ConnectOpts{
+				MyLabel: "sample-label",
+			},
+		}
+
+		var b bytes.Buffer
+		cmdErr := cmd.ProposeCredential(&b, getReader(t, &request))
+		require.Error(t, cmdErr)
+
+		validateError(t, cmdErr, command.ExecuteError, ProposeCredentialErrorCode, "failed to get VC wallet profile")
+		require.Empty(t, b.Bytes())
+	})
+}
+
+func TestCommand_RequestCredential(t *testing.T) {
+	const sampleDIDCommUser = "sample-didcomm-user03"
+
+	mockctx := newMockProvider(t)
+
+	createSampleUserProfile(t, mockctx, &CreateOrUpdateProfileRequest{
+		UserID:             sampleDIDCommUser,
+		LocalKMSPassphrase: samplePassPhrase,
+	})
+
+	token, lock := unlockWallet(t, mockctx, &UnlockWalletRequest{
+		UserID:             sampleDIDCommUser,
+		LocalKMSPassphrase: samplePassPhrase,
+	})
+
+	defer lock()
+
+	t.Run("successfully request credential", func(t *testing.T) {
+		cmd := New(mockctx, &Config{})
+
+		request := &RequestCredentialRequest{
+			WalletAuth:   WalletAuth{UserID: sampleDIDCommUser, Auth: token},
+			ThreadID:     uuid.New().String(),
+			Presentation: json.RawMessage{},
+		}
+
+		var b bytes.Buffer
+		cmdErr := cmd.RequestCredential(&b, getReader(t, &request))
+		require.NoError(t, cmdErr)
+	})
+
+	t.Run("successfully request credential - wait for done", func(t *testing.T) {
+		thID := uuid.New().String()
+
+		icSvc := &mockissuecredential.MockIssueCredentialSvc{
+			RegisterMsgEventHandle: func(ch chan<- service.StateMsg) error {
+				ch <- service.StateMsg{
+					Type:    service.PostState,
+					StateID: "done",
+					Properties: &mockdidexchange.MockEventProperties{
+						Properties: map[string]interface{}{
+							webRedirectStatusKey: model.AckStatusOK,
+							webRedirectURLKey:    exampleWebRedirect,
+						},
+					},
+					Msg: &mockMsg{thID: thID},
+				}
+
+				return nil
+			},
+		}
+		mockctx.ServiceMap[issuecredentialsvc.Name] = icSvc
+
+		cmd := New(mockctx, &Config{})
+
+		request := &RequestCredentialRequest{
+			WalletAuth:   WalletAuth{UserID: sampleDIDCommUser, Auth: token},
+			ThreadID:     thID,
+			Presentation: json.RawMessage{},
+			WaitForDone:  true,
+			Timeout:      600 * time.Millisecond,
+		}
+
+		var b bytes.Buffer
+		cmdErr := cmd.RequestCredential(&b, getReader(t, &request))
+		require.NoError(t, cmdErr)
+
+		var response wallet.CredentialInteractionStatus
+		require.NoError(t, json.NewDecoder(&b).Decode(&response))
+		require.NotEmpty(t, response)
+		require.Equal(t, exampleWebRedirect, response.RedirectURL)
+		require.Equal(t, model.AckStatusOK, response.Status)
+	})
+
+	t.Run("failed to request credential", func(t *testing.T) {
+		icSvc := &mockissuecredential.MockIssueCredentialSvc{
+			ActionContinueFunc: func(string, ...issuecredentialsvc.Opt) error {
+				return fmt.Errorf(sampleCommandError)
+			},
+		}
+		mockctx.ServiceMap[issuecredentialsvc.Name] = icSvc
+
+		cmd := New(mockctx, &Config{})
+
+		request := &RequestCredentialRequest{
+			WalletAuth:   WalletAuth{UserID: sampleDIDCommUser, Auth: token},
+			ThreadID:     uuid.New().String(),
+			Presentation: json.RawMessage{},
+		}
+
+		var b bytes.Buffer
+		cmdErr := cmd.RequestCredential(&b, getReader(t, &request))
+		validateError(t, cmdErr, command.ExecuteError, RequestCredentialErrorCode, sampleCommandError)
+		require.Empty(t, b.Bytes())
+	})
+
+	t.Run("failed to request credential - invalid request", func(t *testing.T) {
+		cmd := New(mockctx, &Config{})
+
+		var b bytes.Buffer
+		cmdErr := cmd.RequestCredential(&b, bytes.NewBufferString("--"))
+		require.Error(t, cmdErr)
+
+		validateError(t, cmdErr, command.ValidationError, InvalidRequestErrorCode, "invalid character")
+		require.Empty(t, b.Bytes())
+	})
+
+	t.Run("failed to request credential - invalid profile", func(t *testing.T) {
+		cmd := New(mockctx, &Config{})
+
+		request := &RequestCredentialRequest{
+			WalletAuth:   WalletAuth{UserID: sampleUserID, Auth: token},
+			ThreadID:     uuid.New().String(),
+			Presentation: json.RawMessage{},
+		}
+
+		var b bytes.Buffer
+		cmdErr := cmd.RequestCredential(&b, getReader(t, &request))
+		require.Error(t, cmdErr)
+
+		validateError(t, cmdErr, command.ExecuteError, RequestCredentialErrorCode, "failed to get VC wallet profile")
 		require.Empty(t, b.Bytes())
 	})
 }
@@ -2254,6 +2589,8 @@ func newMockProvider(t *testing.T) *mockprovider.Provider {
 		outofbandSvc.Name:       &mockoutofband.MockOobService{},
 		didexchange.DIDExchange: &mockdidexchange.MockDIDExchangeSvc{},
 		mediator.Coordination:   &mockmediator.MockMediatorSvc{},
+		issuecredentialsvc.Name: &mockissuecredential.MockIssueCredentialSvc{},
+		oobv2.Name:              &mockoutofbandv2.MockOobService{},
 	}
 
 	return &mockprovider.Provider{
@@ -2331,4 +2668,18 @@ type mockHeaderSigner struct{}
 // SignHeader mock implementation.
 func (s *mockHeaderSigner) SignHeader(req *http.Request, capabilityBytes []byte) (*http.Header, error) {
 	return &http.Header{}, nil
+}
+
+// mockMsg containing custom parent thread ID.
+type mockMsg struct {
+	*service.DIDCommMsgMap
+	thID string
+}
+
+func (m *mockMsg) ParentThreadID() string {
+	return m.thID
+}
+
+func (m *mockMsg) ThreadID() (string, error) {
+	return m.thID, nil
 }

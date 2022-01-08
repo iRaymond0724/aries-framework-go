@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 
@@ -21,22 +22,39 @@ import (
 const (
 	// Name defines the protocol name.
 	Name = "issue-credential"
-	// Spec defines the protocol spec.
-	Spec = "https://didcomm.org/issue-credential/2.0/"
-	// ProposeCredentialMsgType defines the protocol propose-credential message type.
-	ProposeCredentialMsgType = Spec + "propose-credential"
-	// OfferCredentialMsgType defines the protocol offer-credential message type.
-	OfferCredentialMsgType = Spec + "offer-credential"
-	// RequestCredentialMsgType defines the protocol request-credential message type.
-	RequestCredentialMsgType = Spec + "request-credential"
-	// IssueCredentialMsgType defines the protocol issue-credential message type.
-	IssueCredentialMsgType = Spec + "issue-credential"
-	// AckMsgType defines the protocol ack message type.
-	AckMsgType = Spec + "ack"
-	// ProblemReportMsgType defines the protocol problem-report message type.
-	ProblemReportMsgType = Spec + "problem-report"
-	// CredentialPreviewMsgType defines the protocol credential-preview inner object type.
-	CredentialPreviewMsgType = Spec + "credential-preview"
+	// SpecV2 defines the protocol spec V2.
+	SpecV2 = "https://didcomm.org/issue-credential/2.0/"
+	// ProposeCredentialMsgTypeV2 defines the protocol propose-credential message type.
+	ProposeCredentialMsgTypeV2 = SpecV2 + "propose-credential"
+	// OfferCredentialMsgTypeV2 defines the protocol offer-credential message type.
+	OfferCredentialMsgTypeV2 = SpecV2 + "offer-credential"
+	// RequestCredentialMsgTypeV2 defines the protocol request-credential message type.
+	RequestCredentialMsgTypeV2 = SpecV2 + "request-credential"
+	// IssueCredentialMsgTypeV2 defines the protocol issue-credential message type.
+	IssueCredentialMsgTypeV2 = SpecV2 + "issue-credential"
+	// AckMsgTypeV2 defines the protocol ack message type.
+	AckMsgTypeV2 = SpecV2 + "ack"
+	// ProblemReportMsgTypeV2 defines the protocol problem-report message type.
+	ProblemReportMsgTypeV2 = SpecV2 + "problem-report"
+	// CredentialPreviewMsgTypeV2 defines the protocol credential-preview inner object type.
+	CredentialPreviewMsgTypeV2 = SpecV2 + "credential-preview"
+
+	// SpecV3 defines the protocol spec V3.
+	SpecV3 = "https://didcomm.org/issue-credential/3.0/"
+	// ProposeCredentialMsgTypeV3 defines the protocol propose-credential message type.
+	ProposeCredentialMsgTypeV3 = SpecV3 + "propose-credential"
+	// OfferCredentialMsgTypeV3 defines the protocol offer-credential message type.
+	OfferCredentialMsgTypeV3 = SpecV3 + "offer-credential"
+	// RequestCredentialMsgTypeV3 defines the protocol request-credential message type.
+	RequestCredentialMsgTypeV3 = SpecV3 + "request-credential"
+	// IssueCredentialMsgTypeV3 defines the protocol issue-credential message type.
+	IssueCredentialMsgTypeV3 = SpecV3 + "issue-credential"
+	// AckMsgTypeV3 defines the protocol ack message type.
+	AckMsgTypeV3 = SpecV3 + "ack"
+	// ProblemReportMsgTypeV3 defines the protocol problem-report message type.
+	ProblemReportMsgTypeV3 = SpecV3 + "problem-report"
+	// CredentialPreviewMsgTypeV3 defines the protocol credential-preview inner object type.
+	CredentialPreviewMsgTypeV3 = SpecV3 + "credential-preview"
 )
 
 const (
@@ -59,7 +77,9 @@ type customError struct{ error }
 // transitionalPayload keeps payload needed for Continue function to proceed with the action.
 type transitionalPayload struct {
 	Action
-	StateName string
+	StateName  string
+	IsV3       bool
+	Properties map[string]interface{}
 }
 
 // MetaData type to store data for internal usage.
@@ -72,10 +92,14 @@ type MetaData struct {
 	credentialNames []string
 	// keeps offer credential payload,
 	// allows filling the message by providing an option function.
-	offerCredential   *OfferCredential
-	proposeCredential *ProposeCredential
-	requestCredential *RequestCredential
-	issueCredential   *IssueCredential
+	offerCredentialV2   *OfferCredentialV2
+	proposeCredentialV2 *ProposeCredentialV2
+	requestCredentialV2 *RequestCredentialV2
+	issueCredentialV2   *IssueCredentialV2
+	offerCredentialV3   *OfferCredentialV3
+	proposeCredentialV3 *ProposeCredentialV3
+	requestCredentialV3 *RequestCredentialV3
+	issueCredentialV3   *IssueCredentialV3
 	// err is used to determine whether callback was stopped
 	// e.g the user received an action event and executes Stop(err) function
 	// in that case `err` is equal to `err` which was passing to Stop function.
@@ -87,24 +111,44 @@ func (md *MetaData) Message() service.DIDCommMsg {
 	return md.msgClone
 }
 
-// OfferCredential didcomm message.
-func (md *MetaData) OfferCredential() *OfferCredential {
-	return md.offerCredential
+// OfferCredentialV2 didcomm message.
+func (md *MetaData) OfferCredentialV2() *OfferCredentialV2 {
+	return md.offerCredentialV2
 }
 
-// ProposeCredential didcomm message.
-func (md *MetaData) ProposeCredential() *ProposeCredential {
-	return md.proposeCredential
+// OfferCredentialV3 didcomm message.
+func (md *MetaData) OfferCredentialV3() *OfferCredentialV3 {
+	return md.offerCredentialV3
 }
 
-// RequestCredential didcomm message.
-func (md *MetaData) RequestCredential() *RequestCredential {
-	return md.requestCredential
+// ProposeCredentialV2 didcomm message.
+func (md *MetaData) ProposeCredentialV2() *ProposeCredentialV2 {
+	return md.proposeCredentialV2
 }
 
-// IssueCredential didcomm message.
-func (md *MetaData) IssueCredential() *IssueCredential {
-	return md.issueCredential
+// ProposeCredentialV3 didcomm message.
+func (md *MetaData) ProposeCredentialV3() *ProposeCredentialV3 {
+	return md.proposeCredentialV3
+}
+
+// RequestCredentialV2 didcomm message.
+func (md *MetaData) RequestCredentialV2() *RequestCredentialV2 {
+	return md.requestCredentialV2
+}
+
+// RequestCredentialV3 didcomm message.
+func (md *MetaData) RequestCredentialV3() *RequestCredentialV3 {
+	return md.requestCredentialV3
+}
+
+// IssueCredentialV2 didcomm message.
+func (md *MetaData) IssueCredentialV2() *IssueCredentialV2 {
+	return md.issueCredentialV2
+}
+
+// IssueCredentialV3 didcomm message.
+func (md *MetaData) IssueCredentialV3() *IssueCredentialV3 {
+	return md.issueCredentialV3
 }
 
 // CredentialNames are the names with which to save credentials with.
@@ -136,41 +180,136 @@ type Opt func(md *MetaData)
 
 // WithProposeCredential allows providing ProposeCredential message
 // USAGE: This message should be provided after receiving an OfferCredential message.
-func WithProposeCredential(msg *ProposeCredential) Opt {
+func WithProposeCredential(msg *ProposeCredentialParams) Opt {
 	return func(md *MetaData) {
-		md.proposeCredential = msg
+		if md.IsV3 {
+			md.proposeCredentialV3 = msg.AsV3()
+		} else {
+			md.proposeCredentialV2 = msg.AsV2()
+		}
+	}
+}
+
+// WithProposeCredentialV2 allows providing ProposeCredentialV2 message
+// USAGE: This message should be provided after receiving an OfferCredentialV2 message.
+func WithProposeCredentialV2(msg *ProposeCredentialV2) Opt {
+	return func(md *MetaData) {
+		md.proposeCredentialV2 = msg
+	}
+}
+
+// WithProposeCredentialV3 allows providing ProposeCredentialV3 message
+// USAGE: This message should be provided after receiving an OfferCredentialV3 message.
+func WithProposeCredentialV3(msg *ProposeCredentialV3) Opt {
+	return func(md *MetaData) {
+		md.proposeCredentialV3 = msg
 	}
 }
 
 // WithRequestCredential allows providing RequestCredential message
 // USAGE: This message should be provided after receiving an OfferCredential message.
-func WithRequestCredential(msg *RequestCredential) Opt {
+func WithRequestCredential(msg *RequestCredentialParams) Opt {
 	return func(md *MetaData) {
-		md.requestCredential = msg
+		if md.IsV3 {
+			md.requestCredentialV3 = msg.AsV3()
+		} else {
+			md.requestCredentialV2 = msg.AsV2()
+		}
+	}
+}
+
+// WithRequestCredentialV2 allows providing RequestCredentialV2 message
+// USAGE: This message should be provided after receiving an OfferCredentialV2 message.
+func WithRequestCredentialV2(msg *RequestCredentialV2) Opt {
+	return func(md *MetaData) {
+		md.requestCredentialV2 = msg
+	}
+}
+
+// WithRequestCredentialV3 allows providing RequestCredentialV3 message
+// USAGE: This message should be provided after receiving an OfferCredentialV3 message.
+func WithRequestCredentialV3(msg *RequestCredentialV3) Opt {
+	return func(md *MetaData) {
+		md.requestCredentialV3 = msg
 	}
 }
 
 // WithOfferCredential allows providing OfferCredential message
 // USAGE: This message should be provided after receiving a ProposeCredential message.
-func WithOfferCredential(msg *OfferCredential) Opt {
+func WithOfferCredential(msg *OfferCredentialParams) Opt {
 	return func(md *MetaData) {
-		md.offerCredential = msg
+		if md.IsV3 {
+			md.offerCredentialV3 = msg.AsV3()
+		} else {
+			md.offerCredentialV2 = msg.AsV2()
+		}
+	}
+}
+
+// WithOfferCredentialV2 allows providing OfferCredentialV2 message
+// USAGE: This message should be provided after receiving a ProposeCredentialV2 message.
+func WithOfferCredentialV2(msg *OfferCredentialV2) Opt {
+	return func(md *MetaData) {
+		md.offerCredentialV2 = msg
+	}
+}
+
+// WithOfferCredentialV3 allows providing OfferCredentialV3 message
+// USAGE: This message should be provided after receiving a ProposeCredentialV3 message.
+func WithOfferCredentialV3(msg *OfferCredentialV3) Opt {
+	return func(md *MetaData) {
+		md.offerCredentialV3 = msg
 	}
 }
 
 // WithIssueCredential allows providing IssueCredential message
 // USAGE: This message should be provided after receiving a RequestCredential message.
-func WithIssueCredential(msg *IssueCredential) Opt {
+func WithIssueCredential(msg *IssueCredentialParams) Opt {
 	return func(md *MetaData) {
-		md.issueCredential = msg
+		if md.IsV3 {
+			md.issueCredentialV3 = msg.AsV3()
+		} else {
+			md.issueCredentialV2 = msg.AsV2()
+		}
+	}
+}
+
+// WithIssueCredentialV2 allows providing IssueCredentialV2 message
+// USAGE: This message should be provided after receiving a RequestCredentialV2 message.
+func WithIssueCredentialV2(msg *IssueCredentialV2) Opt {
+	return func(md *MetaData) {
+		md.issueCredentialV2 = msg
+	}
+}
+
+// WithIssueCredentialV3 allows providing IssueCredentialV3 message
+// USAGE: This message should be provided after receiving a RequestCredentialV3 message.
+func WithIssueCredentialV3(msg *IssueCredentialV3) Opt {
+	return func(md *MetaData) {
+		md.issueCredentialV3 = msg
 	}
 }
 
 // WithFriendlyNames allows providing names for the credentials.
-// USAGE: This function should be used when the Holder receives IssueCredential message.
+// USAGE: This function should be used when the Holder receives IssueCredentialV2 message.
 func WithFriendlyNames(names ...string) Opt {
 	return func(md *MetaData) {
 		md.credentialNames = names
+	}
+}
+
+// WithProperties allows providing custom properties.
+func WithProperties(props map[string]interface{}) Opt {
+	return func(md *MetaData) {
+		if len(md.properties) == 0 {
+			md.properties = props
+
+			return
+		}
+
+		for k, v := range props {
+			md.properties[k] = v
+		}
 	}
 }
 
@@ -184,35 +323,57 @@ type Provider interface {
 type Service struct {
 	service.Action
 	service.Message
-	store      storage.Store
-	callbacks  chan *MetaData
-	messenger  service.Messenger
-	middleware Handler
+	store       storage.Store
+	callbacks   chan *MetaData
+	messenger   service.Messenger
+	middleware  Handler
+	initialized bool
 }
 
 // New returns the issuecredential service.
 func New(p Provider) (*Service, error) {
-	store, err := p.StorageProvider().OpenStore(Name)
+	svc := Service{}
+
+	err := svc.Initialize(p)
 	if err != nil {
 		return nil, err
 	}
 
+	return &svc, nil
+}
+
+// Initialize initializes the Service. If Initialize succeeds, any further call is a no-op.
+func (s *Service) Initialize(prov interface{}) error {
+	if s.initialized {
+		return nil
+	}
+
+	p, ok := prov.(Provider)
+	if !ok {
+		return fmt.Errorf("expected provider of type `%T`, got type `%T`", Provider(nil), p)
+	}
+
+	store, err := p.StorageProvider().OpenStore(Name)
+	if err != nil {
+		return err
+	}
+
 	err = p.StorageProvider().SetStoreConfig(Name, storage.StoreConfiguration{TagNames: []string{transitionalPayloadKey}})
 	if err != nil {
-		return nil, fmt.Errorf("failed to set store config: %w", err)
+		return fmt.Errorf("failed to set store config: %w", err)
 	}
 
-	svc := &Service{
-		messenger:  p.Messenger(),
-		store:      store,
-		callbacks:  make(chan *MetaData),
-		middleware: initialHandler,
-	}
+	s.messenger = p.Messenger()
+	s.store = store
+	s.callbacks = make(chan *MetaData)
+	s.middleware = initialHandler
 
 	// start the listener
-	go svc.startInternalListener()
+	go s.startInternalListener()
 
-	return svc, nil
+	s.initialized = true
+
+	return nil
 }
 
 // Use allows providing middlewares.
@@ -255,7 +416,7 @@ func (s *Service) HandleInbound(msg service.DIDCommMsg, ctx service.DIDCommConte
 
 	// trigger action event based on message type for inbound messages
 	if canTriggerActionEvents(msg) {
-		err = s.saveTransitionalPayload(md.PIID, md.transitionalPayload)
+		err = s.saveTransitionalPayload(md.PIID, &md.transitionalPayload)
 		if err != nil {
 			return "", fmt.Errorf("save transitional payload: %w", err)
 		}
@@ -294,9 +455,9 @@ func (s *Service) HandleOutbound(msg service.DIDCommMsg, myDID, theirDID string)
 func (s *Service) getCurrentStateNameAndPIID(msg service.DIDCommMsg) (string, string, error) {
 	piID, err := getPIID(msg)
 	if errors.Is(err, service.ErrThreadIDNotFound) {
-		piID = uuid.New().String()
+		msg.SetID(uuid.New().String(), service.WithVersion(getDIDVersion(getVersion(msg.Type()))))
 
-		return piID, stateNameStart, msg.SetID(piID)
+		return msg.ID(), stateNameStart, nil
 	}
 
 	if err != nil {
@@ -317,7 +478,9 @@ func (s *Service) doHandle(msg service.DIDCommMsg, outbound bool) (*MetaData, er
 		return nil, fmt.Errorf("getCurrentStateNameAndPIID: %w", err)
 	}
 
-	current := stateFromName(stateName)
+	protocolVersion := getVersion(msg.Type())
+
+	current := stateFromName(stateName, protocolVersion)
 
 	next, err := nextState(msg, outbound)
 	if err != nil {
@@ -335,8 +498,10 @@ func (s *Service) doHandle(msg service.DIDCommMsg, outbound bool) (*MetaData, er
 				Msg:  msg.Clone(),
 				PIID: piID,
 			},
+			IsV3:       protocolVersion == SpecV3,
+			Properties: next.Properties(),
 		},
-		properties: map[string]interface{}{},
+		properties: next.Properties(),
 		state:      next,
 		msgClone:   msg.Clone(),
 	}, nil
@@ -356,7 +521,7 @@ func (s *Service) startInternalListener() {
 		}
 
 		logger.Errorf("abandoning: %s", msg.err)
-		msg.state = &abandoning{Code: codeInternalError}
+		msg.state = &abandoning{V: getVersion(msg.Msg.Type()), Code: codeInternalError}
 
 		if err := s.handle(msg); err != nil {
 			logger.Errorf("listener handle: %s", err)
@@ -429,30 +594,30 @@ func (s *Service) currentStateName(piID string) (string, error) {
 
 // nolint: gocyclo
 // stateFromName returns the state by given name.
-func stateFromName(name string) state {
+func stateFromName(name, v string) state {
 	switch name {
 	case stateNameStart:
 		return &start{}
 	case stateNameAbandoning:
-		return &abandoning{}
+		return &abandoning{V: v}
 	case stateNameDone:
-		return &done{}
+		return &done{V: v}
 	case stateNameProposalReceived:
-		return &proposalReceived{}
+		return &proposalReceived{V: v}
 	case stateNameOfferSent:
-		return &offerSent{}
+		return &offerSent{V: v}
 	case stateNameRequestReceived:
-		return &requestReceived{}
+		return &requestReceived{V: v}
 	case stateNameCredentialIssued:
-		return &credentialIssued{}
+		return &credentialIssued{V: v}
 	case stateNameProposalSent:
-		return &proposalSent{}
+		return &proposalSent{V: v}
 	case stateNameOfferReceived:
-		return &offerReceived{}
+		return &offerReceived{V: v}
 	case stateNameRequestSent:
-		return &requestSent{}
+		return &requestSent{V: v}
 	case stateNameCredentialReceived:
-		return &credentialReceived{}
+		return &credentialReceived{V: v}
 	default:
 		return &noOp{}
 	}
@@ -460,36 +625,36 @@ func stateFromName(name string) state {
 
 func nextState(msg service.DIDCommMsg, outbound bool) (state, error) {
 	switch msg.Type() {
-	case ProposeCredentialMsgType:
+	case ProposeCredentialMsgTypeV2, ProposeCredentialMsgTypeV3:
 		if outbound {
-			return &proposalSent{}, nil
+			return &proposalSent{V: getVersion(msg.Type())}, nil
 		}
 
-		return &proposalReceived{}, nil
-	case OfferCredentialMsgType:
+		return &proposalReceived{V: getVersion(msg.Type())}, nil
+	case OfferCredentialMsgTypeV2, OfferCredentialMsgTypeV3:
 		if outbound {
-			return &offerSent{}, nil
+			return &offerSent{V: getVersion(msg.Type())}, nil
 		}
 
-		return &offerReceived{}, nil
-	case RequestCredentialMsgType:
+		return &offerReceived{V: getVersion(msg.Type())}, nil
+	case RequestCredentialMsgTypeV2, RequestCredentialMsgTypeV3:
 		if outbound {
-			return &requestSent{}, nil
+			return &requestSent{V: getVersion(msg.Type())}, nil
 		}
 
-		return &requestReceived{}, nil
-	case IssueCredentialMsgType:
-		return &credentialReceived{}, nil
-	case ProblemReportMsgType:
-		return &abandoning{}, nil
-	case AckMsgType:
-		return &done{}, nil
+		return &requestReceived{V: getVersion(msg.Type())}, nil
+	case IssueCredentialMsgTypeV2, IssueCredentialMsgTypeV3:
+		return &credentialReceived{V: getVersion(msg.Type()), properties: redirectInfo(msg)}, nil
+	case ProblemReportMsgTypeV2, ProblemReportMsgTypeV3:
+		return &abandoning{V: getVersion(msg.Type()), properties: redirectInfo(msg)}, nil
+	case AckMsgTypeV2, AckMsgTypeV3:
+		return &done{V: getVersion(msg.Type())}, nil
 	default:
 		return nil, fmt.Errorf("unrecognized msgType: %s", msg.Type())
 	}
 }
 
-func (s *Service) saveTransitionalPayload(id string, data transitionalPayload) error {
+func (s *Service) saveTransitionalPayload(id string, data *transitionalPayload) error {
 	src, err := json.Marshal(data)
 	if err != nil {
 		return fmt.Errorf("marshal transitional payload: %w", err)
@@ -500,11 +665,16 @@ func (s *Service) saveTransitionalPayload(id string, data transitionalPayload) e
 
 // canTriggerActionEvents checks if the incoming message can trigger an action event.
 func canTriggerActionEvents(msg service.DIDCommMsg) bool {
-	return msg.Type() == ProposeCredentialMsgType ||
-		msg.Type() == OfferCredentialMsgType ||
-		msg.Type() == IssueCredentialMsgType ||
-		msg.Type() == RequestCredentialMsgType ||
-		msg.Type() == ProblemReportMsgType
+	return msg.Type() == ProposeCredentialMsgTypeV2 ||
+		msg.Type() == OfferCredentialMsgTypeV2 ||
+		msg.Type() == IssueCredentialMsgTypeV2 ||
+		msg.Type() == RequestCredentialMsgTypeV2 ||
+		msg.Type() == ProblemReportMsgTypeV2 ||
+		msg.Type() == ProposeCredentialMsgTypeV3 ||
+		msg.Type() == OfferCredentialMsgTypeV3 ||
+		msg.Type() == IssueCredentialMsgTypeV3 ||
+		msg.Type() == RequestCredentialMsgTypeV3 ||
+		msg.Type() == ProblemReportMsgTypeV3
 }
 
 func (s *Service) getTransitionalPayload(id string) (*transitionalPayload, error) {
@@ -528,7 +698,7 @@ func (s *Service) deleteTransitionalPayload(id string) error {
 }
 
 // ActionContinue allows proceeding with the action by the piID.
-func (s *Service) ActionContinue(piID string, opt Opt) error {
+func (s *Service) ActionContinue(piID string, opts ...Opt) error {
 	tPayload, err := s.getTransitionalPayload(piID)
 	if err != nil {
 		return fmt.Errorf("get transitional payload: %w", err)
@@ -536,13 +706,13 @@ func (s *Service) ActionContinue(piID string, opt Opt) error {
 
 	md := &MetaData{
 		transitionalPayload: *tPayload,
-		state:               stateFromName(tPayload.StateName),
+		state:               stateFromName(tPayload.StateName, getVersion(tPayload.Msg.Type())),
 		msgClone:            tPayload.Msg.Clone(),
 		inbound:             true,
-		properties:          map[string]interface{}{},
+		properties:          tPayload.Properties,
 	}
 
-	if opt != nil {
+	for _, opt := range opts {
 		opt(md)
 	}
 
@@ -556,7 +726,7 @@ func (s *Service) ActionContinue(piID string, opt Opt) error {
 }
 
 // ActionStop allows stopping the action by the piID.
-func (s *Service) ActionStop(piID string, cErr error) error {
+func (s *Service) ActionStop(piID string, cErr error, opts ...Opt) error {
 	tPayload, err := s.getTransitionalPayload(piID)
 	if err != nil {
 		return fmt.Errorf("get transitional payload: %w", err)
@@ -564,10 +734,14 @@ func (s *Service) ActionStop(piID string, cErr error) error {
 
 	md := &MetaData{
 		transitionalPayload: *tPayload,
-		state:               stateFromName(tPayload.StateName),
+		state:               stateFromName(tPayload.StateName, getVersion(tPayload.Msg.Type())),
 		msgClone:            tPayload.Msg.Clone(),
 		inbound:             true,
 		properties:          map[string]interface{}{},
+	}
+
+	for _, opt := range opts {
+		opt(md)
 	}
 
 	if err := s.deleteTransitionalPayload(md.PIID); err != nil {
@@ -662,6 +836,22 @@ func (s *Service) newDIDCommActionMsg(md *MetaData) service.DIDCommAction {
 	}
 }
 
+func getVersion(t string) string {
+	if strings.HasPrefix(t, SpecV2) {
+		return SpecV2
+	}
+
+	return SpecV3
+}
+
+func getDIDVersion(v string) service.Version {
+	if v == SpecV3 {
+		return service.V2
+	}
+
+	return service.V1
+}
+
 func (s *Service) execute(next state, md *MetaData) (state, stateAction, error) {
 	md.state = next
 	s.sendMsgEvents(md, next.Name(), service.PreState)
@@ -704,10 +894,33 @@ func (s *Service) Name() string {
 // Accept msg checks the msg type.
 func (s *Service) Accept(msgType string) bool {
 	switch msgType {
-	case ProposeCredentialMsgType, OfferCredentialMsgType, RequestCredentialMsgType,
-		IssueCredentialMsgType, AckMsgType, ProblemReportMsgType:
+	case ProposeCredentialMsgTypeV2, OfferCredentialMsgTypeV2, RequestCredentialMsgTypeV2,
+		IssueCredentialMsgTypeV2, AckMsgTypeV2, ProblemReportMsgTypeV2:
+		return true
+	case ProposeCredentialMsgTypeV3, OfferCredentialMsgTypeV3, RequestCredentialMsgTypeV3,
+		IssueCredentialMsgTypeV3, AckMsgTypeV3, ProblemReportMsgTypeV3:
 		return true
 	}
 
 	return false
+}
+
+// redirectInfo reads web redirect info decorator from given DIDComm Msg.
+func redirectInfo(msg service.DIDCommMsg) map[string]interface{} {
+	var redirectInfo struct {
+		WebRedirectV2 map[string]interface{} `json:"~web-redirect,omitempty"`
+		WebRedirectV3 map[string]interface{} `json:"web-redirect,omitempty"`
+	}
+
+	err := msg.Decode(&redirectInfo)
+	if err != nil {
+		// Don't fail protocol, in case of error while reading webredirect info.
+		logger.Warnf("failed to decode redirect info: %s", err)
+	}
+
+	if msg.Type() == IssueCredentialMsgTypeV3 {
+		return redirectInfo.WebRedirectV3
+	}
+
+	return redirectInfo.WebRedirectV2
 }

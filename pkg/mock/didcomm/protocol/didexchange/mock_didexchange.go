@@ -45,6 +45,11 @@ type MockDIDExchangeSvc struct {
 	CreateConnRecordFunc     func(*connection.Record, *did.Doc) error
 }
 
+// Initialize service.
+func (m *MockDIDExchangeSvc) Initialize(interface{}) error {
+	return nil
+}
+
 // HandleInbound msg.
 func (m *MockDIDExchangeSvc) HandleInbound(msg service.DIDCommMsg, ctx service.DIDCommContext) (string, error) {
 	if m.HandleFunc != nil {
@@ -225,8 +230,9 @@ func (p *MockProvider) VDRegistry() vdrapi.Registry {
 
 // MockEventProperties is a didexchange.Event.
 type MockEventProperties struct {
-	ConnID string
-	InvID  string
+	ConnID     string
+	InvID      string
+	Properties map[string]interface{}
 }
 
 // ConnectionID returns the connection id.
@@ -241,8 +247,14 @@ func (m *MockEventProperties) InvitationID() string {
 
 // All returns all properties.
 func (m *MockEventProperties) All() map[string]interface{} {
-	return map[string]interface{}{
+	p := map[string]interface{}{
 		"connectionID": m.ConnectionID(),
 		"invitationID": m.InvitationID(),
 	}
+
+	for k, v := range m.Properties {
+		p[k] = v
+	}
+
+	return p
 }
